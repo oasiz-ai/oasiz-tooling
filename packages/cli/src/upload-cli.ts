@@ -354,22 +354,6 @@ function getGameFolders(): string[] {
     .map((dirent) => dirent.name);
 }
 
-function validateGameFolder(gameFolder: string): string {
-  const rootDir = PROJECT_ROOT;
-  const gamePath = join(rootDir, gameFolder);
-
-  if (!existsSync(gamePath)) {
-    logError(`Game folder not found: ${gameFolder}`);
-    console.log("");
-    console.log("Available game folders:");
-    const folders = getGameFolders();
-    folders.forEach((f) => console.log(`  - ${f}`));
-    process.exit(1);
-  }
-
-  return gamePath;
-}
-
 async function readPublishConfig(gamePath: string): Promise<PublishConfig> {
   const publishPath = join(gamePath, "publish.json");
   const gameFolder = gamePath.split("/").pop() || "unknown";
