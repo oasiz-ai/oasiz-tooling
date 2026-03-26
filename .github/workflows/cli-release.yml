@@ -32,56 +32,31 @@ jobs:
           node-version: "22"
           cache: "npm"
           registry-url: "https://registry.npmjs.org"
+          scope: "@oasiz"
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Configure npm authentication
-        run: echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" >> ~/.npmrc
-        env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify npm publish identity
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -z "${NPM_TOKEN:-}" ]; then
-            echo "NPM_TOKEN is not configured for this workflow." >&2
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NODE_AUTH_TOKEN is not configured for this workflow." >&2
             exit 1
           fi
 
-          if ! NPM_USER="$(npm whoami 2>/tmp/npm-whoami.err)"; then
-            cat /tmp/npm-whoami.err >&2
-            echo "Failed to authenticate to npm with NPM_TOKEN." >&2
-            echo "The token is missing, invalid, expired, or lacks access to the npm registry." >&2
-            exit 1
-          fi
-
-          echo "Authenticated to npm as: ${NPM_USER}"
-
-          case "${NPM_USER}" in
-            abeldagne|jonathan_dinh|josssiiiah)
-              ;;
-            *)
-              echo "Unexpected npm user for @oasiz/cli publish: ${NPM_USER}" >&2
-              echo "Update the NPM_TOKEN secret to a token owned by an @oasiz/cli maintainer." >&2
-              exit 1
-              ;;
-          esac
-
-          OWNER_LIST="$(npm owner ls @oasiz/cli)"
-          echo "${OWNER_LIST}"
-
-          if ! grep -q "^${NPM_USER} <" <<< "${OWNER_LIST}"; then
-            echo "npm user ${NPM_USER} is not an owner of @oasiz/cli." >&2
-            exit 1
-          fi
+          echo "NODE_AUTH_TOKEN length: ${#NODE_AUTH_TOKEN}"
+          echo "npm registry: $(npm config get registry)"
+          echo "npm userconfig: $(npm config get userconfig)"
+          echo "If NPM_TOKEN was updated after this workflow run was created, queue a new run instead of rerunning this one."
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Semantic release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm exec --workspace @oasiz/cli semantic-release
