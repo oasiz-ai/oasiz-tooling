@@ -1,0 +1,37 @@
+name: SDK Tests
+
+on:
+  pull_request:
+    branches: ["**"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    name: Build and Test SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build SDK
+        run: npm run build --workspace @oasiz/sdk
+
+      - name: Test SDK
+        run: npm run test --workspace @oasiz/sdk

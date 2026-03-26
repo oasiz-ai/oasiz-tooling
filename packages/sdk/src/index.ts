@@ -1,0 +1,70 @@
+import { triggerHaptic } from "./haptics.ts";
+import { enableLogOverlay } from "./log-overlay.ts";
+import {
+  getGameId,
+  getPlayerAvatar,
+  getPlayerName,
+  getRoomCode,
+  openInviteModal,
+  shareRoomCode,
+} from "./multiplayer.ts";
+import { emitScoreConfig, submitScore } from "./score.ts";
+import { flushGameState, loadGameState, saveGameState } from "./state.ts";
+import { onPause, onResume } from "./lifecycle.ts";
+import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+
+export { triggerHaptic } from "./haptics.ts";
+export { enableLogOverlay } from "./log-overlay.ts";
+export {
+  getGameId,
+  getPlayerAvatar,
+  getPlayerName,
+  getRoomCode,
+  openInviteModal,
+  shareRoomCode,
+} from "./multiplayer.ts";
+export type { ShareRoomCodeOptions } from "./multiplayer.ts";
+export { emitScoreConfig, submitScore } from "./score.ts";
+export { flushGameState, loadGameState, saveGameState } from "./state.ts";
+export { onPause, onResume } from "./lifecycle.ts";
+export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+export type { Unsubscribe } from "./lifecycle.ts";
+export type {
+  GameState,
+  HapticType,
+  LogOverlayEntry,
+  LogOverlayHandle,
+  LogOverlayLevel,
+  LogOverlayOptions,
+  ScoreAnchor,
+  ScoreConfig,
+} from "./types.ts";
+
+export const oasiz = {
+  submitScore,
+  emitScoreConfig,
+  triggerHaptic,
+  enableLogOverlay,
+  loadGameState,
+  saveGameState,
+  flushGameState,
+  shareRoomCode,
+  openInviteModal,
+  onPause,
+  onResume,
+  onBackButton,
+  onLeaveGame,
+  leaveGame,
+  get gameId(): string | undefined {
+    return getGameId();
+  },
+  get roomCode(): string | undefined {
+    return getRoomCode();
+  },
+  get playerName(): string | undefined {
+    return getPlayerName();
+  },
+  get playerAvatar(): string | undefined {
+    return getPlayerAvatar();
+  },
+};
