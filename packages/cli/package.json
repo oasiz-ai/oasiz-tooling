@@ -6,22 +6,22 @@
   "bin": {
     "oasiz": "bin/oasiz.js"
   },
-  "main": "./dist/index.cjs",
+  "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.cjs"
+      "import": "./dist/index.js"
     }
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "assets"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts --target node20",
+    "build": "tsup src/index.ts --format esm --dts --target node20",
     "prepack": "npm run build",
     "test": "node --experimental-strip-types --test ./tests/**/*.test.ts"
   },

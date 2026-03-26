@@ -15,3 +15,15 @@ test("runUploadCli shows help without throwing", async () => {
     await runUploadCli(["--help"]);
   });
 });
+
+test("runCli supports info without throwing", async () => {
+  await assert.doesNotReject(async () => {
+    await runCli(["info"]);
+  });
+});
+
+test("runUploadCli supports deprecated list flag without throwing", async () => {
+  await assert.doesNotReject(async () => {
+    await runUploadCli(["--list"]);
+  });
+});

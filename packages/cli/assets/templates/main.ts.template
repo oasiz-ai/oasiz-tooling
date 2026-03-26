@@ -1,0 +1,356 @@
+interface Settings {
+  music: boolean;
+  fx: boolean;
+  haptics: boolean;
+}
+
+type GameState = "start" | "playing" | "gameover";
+
+declare global {
+  interface Window {
+    submitScore?: (score: number) => void;
+    triggerHaptic?: (type: "light" | "medium" | "heavy" | "success" | "error") => void;
+    loadGameState?: () => Record<string, unknown>;
+    saveGameState?: (state: Record<string, unknown>) => void;
+    flushGameState?: () => void;
+  }
+}
+
+class GameApp {
+  private readonly canvas: HTMLCanvasElement;
+  private readonly ctx: CanvasRenderingContext2D;
+  private readonly titleEl: HTMLElement;
+  private readonly startScreenEl: HTMLElement;
+  private readonly hudEl: HTMLElement;
+  private readonly scoreEl: HTMLElement;
+  private readonly gameOverEl: HTMLElement;
+  private readonly finalScoreEl: HTMLElement;
+  private readonly settingsBtn: HTMLButtonElement;
+  private readonly settingsModal: HTMLElement;
+  private readonly isMobile: boolean;
+
+  private settings: Settings;
+  private gameState: GameState = "start";
+  private score = 0;
+  private startTime = 0;
+  private rafId = 0;
+  private sessionsPlayed = 0;
+  private orbPhase = 0;
+
+  constructor() {
+    const canvas = document.getElementById("game-canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) {
+      throw new Error("Missing canvas element");
+    }
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Failed to create 2D context");
+    }
+
+    this.canvas = canvas;
+    this.ctx = ctx;
+    this.titleEl = this.requireEl("game-title");
+    this.startScreenEl = this.requireEl("start-screen");
+    this.hudEl = this.requireEl("hud");
+    this.scoreEl = this.requireEl("score-value");
+    this.gameOverEl = this.requireEl("game-over-screen");
+    this.finalScoreEl = this.requireEl("final-score");
+    this.settingsBtn = this.requireButton("settings-btn");
+    this.settingsModal = this.requireEl("settings-modal");
+    this.isMobile = window.matchMedia("(pointer: coarse)").matches;
+    this.settings = this.loadSettings();
+
+    this.titleEl.textContent = "__GAME_TITLE__";
+
+    this.loadPersistentState();
+    this.setupUi();
+    this.resizeCanvas();
+    this.render(0);
+
+    window.addEventListener("resize", () => this.resizeCanvas());
+    this.canvas.addEventListener("pointerdown", (event) => this.handlePointerDown(event));
+
+    console.log("[GameApp]", "Initialized");
+  }
+
+  private requireEl(id: string): HTMLElement {
+    const element = document.getElementById(id);
+    if (!element) {
+      throw new Error("Missing element: " + id);
+    }
+    return element;
+  }
+
+  private requireButton(id: string): HTMLButtonElement {
+    const element = this.requireEl(id);
+    if (!(element instanceof HTMLButtonElement)) {
+      throw new Error("Expected button: " + id);
+    }
+    return element;
+  }
+
+  private loadSettings(): Settings {
+    const raw = localStorage.getItem("gameSettings");
+    if (!raw) {
+      return { music: true, fx: true, haptics: true };
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<Settings>;
+      return {
+        music: parsed.music ?? true,
+        fx: parsed.fx ?? true,
+        haptics: parsed.haptics ?? true,
+      };
+    } catch {
+      return { music: true, fx: true, haptics: true };
+    }
+  }
+
+  private saveSettings(): void {
+    localStorage.setItem("gameSettings", JSON.stringify(this.settings));
+  }
+
+  private loadPersistentState(): void {
+    if (typeof window.loadGameState !== "function") return;
+    const state = window.loadGameState();
+    const value = state.sessionsPlayed;
+    if (typeof value === "number" && Number.isFinite(value)) {
+      this.sessionsPlayed = Math.max(0, Math.floor(value));
+    }
+  }
+
+  private savePersistentState(): void {
+    if (typeof window.saveGameState !== "function") return;
+    window.saveGameState({ sessionsPlayed: this.sessionsPlayed });
+  }
+
+  private setupUi(): void {
+    const startBtn = this.requireButton("start-btn");
+    const restartBtn = this.requireButton("restart-btn");
+    const endBtn = this.requireButton("end-btn");
+    const closeSettingsBtn = this.requireButton("settings-close-btn");
+    const backdrop = this.requireEl("settings-backdrop");
+    const toggleButtons = Array.from(document.querySelectorAll("[data-setting]"));
+
+    startBtn.addEventListener("click", () => {
+      this.triggerHaptic("light");
+      this.startGame();
+    });
+
+    restartBtn.addEventListener("click", () => {
+      this.triggerHaptic("light");
+      this.startGame();
+    });
+
+    endBtn.addEventListener("click", () => {
+      this.triggerHaptic("light");
+      this.endGame();
+    });
+
+    this.settingsBtn.addEventListener("click", () => {
+      this.triggerHaptic("light");
+      this.showSettings(true);
+    });
+
+    closeSettingsBtn.addEventListener("click", () => {
+      this.triggerHaptic("light");
+      this.showSettings(false);
+    });
+
+    backdrop.addEventListener("click", () => this.showSettings(false));
+
+    toggleButtons.forEach((node) => {
+      if (!(node instanceof HTMLButtonElement)) return;
+      const key = node.dataset.setting;
+      if (key !== "music" && key !== "fx" && key !== "haptics") return;
+
+      node.addEventListener("click", () => {
+        this.triggerHaptic("light");
+        this.settings[key] = !this.settings[key];
+        this.saveSettings();
+        this.syncSettingButtons();
+      });
+    });
+
+    this.syncSettingButtons();
+    this.setGameplayUiVisible(false);
+    this.showSettings(false);
+  }
+
+  private syncSettingButtons(): void {
+    const toggleButtons = Array.from(document.querySelectorAll("[data-setting]"));
+    toggleButtons.forEach((node) => {
+      if (!(node instanceof HTMLButtonElement)) return;
+      const key = node.dataset.setting;
+      if (key !== "music" && key !== "fx" && key !== "haptics") return;
+
+      const enabled = this.settings[key];
+      node.dataset.enabled = enabled ? "true" : "false";
+      node.textContent = (key === "fx" ? "Sound FX" : key.charAt(0).toUpperCase() + key.slice(1)) + ": " + (enabled ? "On" : "Off");
+    });
+  }
+
+  private setGameplayUiVisible(visible: boolean): void {
+    if (visible) {
+      this.hudEl.classList.remove("hidden");
+      this.settingsBtn.classList.remove("hidden");
+      return;
+    }
+
+    this.hudEl.classList.add("hidden");
+    this.settingsBtn.classList.add("hidden");
+  }
+
+  private showSettings(open: boolean): void {
+    if (open) {
+      this.settingsModal.classList.remove("hidden");
+      return;
+    }
+    this.settingsModal.classList.add("hidden");
+  }
+
+  private startGame(): void {
+    this.gameState = "playing";
+    this.score = 0;
+    this.startTime = performance.now();
+    this.updateScore();
+
+    this.startScreenEl.classList.add("hidden");
+    this.gameOverEl.classList.add("hidden");
+    this.setGameplayUiVisible(true);
+    this.showSettings(false);
+
+    this.sessionsPlayed += 1;
+    this.savePersistentState();
+    this.triggerHaptic("success");
+
+    console.log("[StartGame]", "Run started");
+  }
+
+  private endGame(): void {
+    if (this.gameState !== "playing") return;
+
+    this.gameState = "gameover";
+    this.setGameplayUiVisible(false);
+    this.gameOverEl.classList.remove("hidden");
+    this.finalScoreEl.textContent = String(this.score);
+    this.submitFinalScore();
+    this.triggerHaptic("error");
+
+    if (typeof window.flushGameState === "function") {
+      window.flushGameState();
+    }
+
+    console.log("[EndGame]", "Run ended with score " + this.score);
+  }
+
+  private submitFinalScore(): void {
+    const finalScore = Math.max(0, Math.floor(this.score));
+    if (typeof window.submitScore === "function") {
+      window.submitScore(finalScore);
+    }
+  }
+
+  private triggerHaptic(type: "light" | "medium" | "heavy" | "success" | "error"): void {
+    if (!this.settings.haptics) return;
+    if (typeof window.triggerHaptic === "function") {
+      window.triggerHaptic(type);
+    }
+  }
+
+  private updateScore(): void {
+    this.scoreEl.textContent = String(this.score);
+  }
+
+  private handlePointerDown(event: PointerEvent): void {
+    if (this.gameState !== "playing") return;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    const centerX = this.canvas.width * 0.5;
+    const centerY = this.canvas.height * 0.5;
+    const distance = Math.hypot(x - centerX, y - centerY);
+    const radius = Math.min(this.canvas.width, this.canvas.height) * 0.18;
+
+    if (distance <= radius) {
+      this.score += 1;
+      this.updateScore();
+      this.triggerHaptic("medium");
+      this.orbPhase += 0.45;
+      console.log("[HandlePointerDown]", "Score increased to " + this.score);
+    } else {
+      this.triggerHaptic("light");
+    }
+  }
+
+  private resizeCanvas(): void {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    this.canvas.width = width;
+    this.canvas.height = height;
+
+    const topOffset = this.isMobile ? 120 : 45;
+    document.documentElement.style.setProperty("--safe-top", topOffset + "px");
+    console.log("[ResizeCanvas]", "Resized to " + width + "x" + height);
+  }
+
+  private render(timestamp: number): void {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    const elapsed = this.gameState === "playing" ? (timestamp - this.startTime) / 1000 : 0;
+
+    if (this.gameState === "playing" && elapsed >= 30) {
+      this.endGame();
+    }
+
+    this.ctx.clearRect(0, 0, w, h);
+
+    const gradient = this.ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, "#0b1220");
+    gradient.addColorStop(1, "#0f1f3a");
+    this.ctx.fillStyle = gradient;
+    this.ctx.fillRect(0, 0, w, h);
+
+    const centerX = w * 0.5;
+    const centerY = h * 0.5;
+    const pulse = 1 + Math.sin(timestamp * 0.004 + this.orbPhase) * 0.08;
+    const radius = Math.min(w, h) * 0.18 * pulse;
+
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#5bd4ff";
+    this.ctx.fill();
+
+    this.ctx.beginPath();
+    this.ctx.arc(centerX, centerY, radius * 0.45, 0, Math.PI * 2);
+    this.ctx.fillStyle = "#e8fbff";
+    this.ctx.fill();
+
+    if (this.gameState === "playing") {
+      const secondsLeft = Math.max(0, Math.ceil(30 - elapsed));
+      this.ctx.fillStyle = "#ffffff";
+      this.ctx.font = (this.isMobile ? 22 : 18) + "px Arial, sans-serif";
+      this.ctx.textAlign = "center";
+      this.ctx.fillText("Tap the core - " + secondsLeft + "s", centerX, h * 0.16);
+    }
+
+    this.rafId = requestAnimationFrame((next) => this.render(next));
+  }
+}
+
+function startApp(): void {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      new GameApp();
+    });
+    return;
+  }
+  new GameApp();
+}
+
+startApp();
+
+export {};
