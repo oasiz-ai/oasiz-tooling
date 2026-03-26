@@ -4,7 +4,7 @@
   "description": "CLI for building and uploading Oasiz games.",
   "type": "module",
   "bin": {
-    "oasiz": "./bin/oasiz.js"
+    "oasiz": "bin/oasiz.js"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -63,6 +63,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/oasiz-ai/oasiz-tooling.git"
+    "url": "git+https://github.com/oasiz-ai/oasiz-tooling.git"
   }
 }
