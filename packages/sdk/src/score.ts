@@ -1,8 +1,5 @@
-import type { ScoreConfig } from "./types.ts";
-
 type ScoreBridgeWindow = Window & {
   submitScore?: (score: number) => void;
-  emitScoreConfig?: (config: ScoreConfig) => void;
 };
 
 function isDevelopment(): boolean {
@@ -45,15 +42,4 @@ export function submitScore(score: number): void {
   }
 
   warnMissingBridge("submitScore");
-}
-
-export function emitScoreConfig(config: ScoreConfig): void {
-  const bridge = getBridgeWindow();
-
-  if (typeof bridge?.emitScoreConfig === "function") {
-    bridge.emitScoreConfig(config);
-    return;
-  }
-
-  warnMissingBridge("emitScoreConfig");
 }

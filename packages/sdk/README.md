@@ -13,30 +13,20 @@ npm install @oasiz/sdk
 ```ts
 import { oasiz } from "@oasiz/sdk";
 
-// 1. Emit score normalization config once on init
-oasiz.emitScoreConfig({
-  anchors: [
-    { raw: 30, normalized: 100 },
-    { raw: 60, normalized: 300 },
-    { raw: 120, normalized: 600 },
-    { raw: 300, normalized: 950 },
-  ],
-});
-
-// 2. Load persisted state at the start of each session
+// 1. Load persisted state at the start of each session
 const state = oasiz.loadGameState();
 let level = typeof state.level === "number" ? state.level : 1;
 
-// 3. Save state at checkpoints
+// 2. Save state at checkpoints
 oasiz.saveGameState({ level, coins: 42 });
 
-// 4. Trigger haptics on key events
+// 3. Trigger haptics on key events
 oasiz.triggerHaptic("medium");
 
-// 5. Submit score when the game ends
+// 4. Submit score when the game ends
 oasiz.submitScore(score);
 
-// 6. Optionally surface console logs in-game while debugging
+// 5. Optionally surface console logs in-game while debugging
 oasiz.enableLogOverlay({
   enabled: new URLSearchParams(window.location.search).has("oasizLogs"),
   collapsed: true,
@@ -59,34 +49,6 @@ private onGameOver(): void {
 
 - `score` must be a non-negative integer. Floats are floored automatically.
 - Do not call on intermediate scores or level completions, only on final game over.
-
----
-
-### `oasiz.emitScoreConfig(config)`
-
-Maps raw score values to the platform's normalized 0–1000 scale. Call once during initialization, not every frame.
-
-```ts
-oasiz.emitScoreConfig({
-  anchors: [
-    { raw: 10,  normalized: 100 }, // beginner
-    { raw: 30,  normalized: 300 }, // good
-    { raw: 75,  normalized: 600 }, // great
-    { raw: 200, normalized: 950 }, // godlike
-  ],
-});
-```
-
-**Anchor rules:**
-- Exactly 4 anchors required.
-- `raw` values must be strictly increasing.
-- `normalized` values must end at exactly `950`.
-- Choose thresholds based on realistic player skill bands.
-
-**Practical guidance by game type:**
-- Survival / time games → use seconds survived as `raw`
-- Score accumulation games → use points as `raw`
-- Puzzle games → use level reached or stars earned as `raw`
 
 ---
 
@@ -355,7 +317,6 @@ All methods are also available as named exports if you prefer not to use the `oa
 ```ts
 import {
   submitScore,
-  emitScoreConfig,
   triggerHaptic,
   loadGameState,
   saveGameState,
@@ -384,8 +345,6 @@ import type {
   HapticType,
   LogOverlayHandle,
   LogOverlayOptions,
-  ScoreAnchor,
-  ScoreConfig,
 } from "@oasiz/sdk";
 ```
 

@@ -18,14 +18,7 @@ npm install @oasiz/sdk
 ```ts
 import { oasiz } from "@oasiz/sdk";
 
-oasiz.emitScoreConfig({
-  anchors: [
-    { raw: 30, normalized: 100 },
-    { raw: 60, normalized: 300 },
-    { raw: 120, normalized: 600 },
-    { raw: 300, normalized: 950 }
-  ]
-});
+oasiz.submitScore(1200);
 ```
 
 ### `@oasiz/cli`

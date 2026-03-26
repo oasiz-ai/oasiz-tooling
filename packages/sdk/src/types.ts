@@ -24,13 +24,4 @@ export interface LogOverlayHandle {
   show: () => void;
 }
 
-export interface ScoreAnchor {
-  raw: number;
-  normalized: 100 | 300 | 600 | 950;
-}
-
-export interface ScoreConfig {
-  anchors: [ScoreAnchor, ScoreAnchor, ScoreAnchor, ScoreAnchor];
-}
-
 export type GameState = Record<string, unknown>;

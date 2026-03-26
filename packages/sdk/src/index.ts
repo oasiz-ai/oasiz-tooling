@@ -8,7 +8,7 @@ import {
   openInviteModal,
   shareRoomCode,
 } from "./multiplayer.ts";
-import { emitScoreConfig, submitScore } from "./score.ts";
+import { submitScore } from "./score.ts";
 import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
@@ -24,7 +24,7 @@ export {
   shareRoomCode,
 } from "./multiplayer.ts";
 export type { ShareRoomCodeOptions } from "./multiplayer.ts";
-export { emitScoreConfig, submitScore } from "./score.ts";
+export { submitScore } from "./score.ts";
 export { flushGameState, loadGameState, saveGameState } from "./state.ts";
 export { onPause, onResume } from "./lifecycle.ts";
 export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
@@ -36,13 +36,10 @@ export type {
   LogOverlayHandle,
   LogOverlayLevel,
   LogOverlayOptions,
-  ScoreAnchor,
-  ScoreConfig,
 } from "./types.ts";
 
 export const oasiz = {
   submitScore,
-  emitScoreConfig,
   triggerHaptic,
   enableLogOverlay,
   loadGameState,

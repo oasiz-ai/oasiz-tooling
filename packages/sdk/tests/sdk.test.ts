@@ -12,7 +12,7 @@ import {
   openInviteModal,
   shareRoomCode,
 } from "../src/multiplayer.ts";
-import { emitScoreConfig, submitScore } from "../src/score.ts";
+import { submitScore } from "../src/score.ts";
 import { flushGameState, loadGameState, saveGameState } from "../src/state.ts";
 
 function withWindow<T>(value: unknown, run: () => T): T {
@@ -192,27 +192,6 @@ test("submitScore calls bridge with normalized integer score", () => {
   );
 
   assert.deepEqual(calls, [42, 0]);
-});
-
-test("emitScoreConfig calls bridge when available", () => {
-  const calls: unknown[] = [];
-  withWindow(
-    {
-      emitScoreConfig: (config: unknown) => calls.push(config),
-    },
-    () => {
-      emitScoreConfig({
-        anchors: [
-          { raw: 10, normalized: 100 },
-          { raw: 25, normalized: 300 },
-          { raw: 50, normalized: 600 },
-          { raw: 100, normalized: 950 },
-        ],
-      });
-    },
-  );
-
-  assert.equal(calls.length, 1);
 });
 
 test("triggerHaptic calls bridge with provided type", () => {
