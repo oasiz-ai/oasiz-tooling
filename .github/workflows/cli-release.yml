@@ -41,6 +41,32 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Verify npm publish identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NPM_USER="$(npm whoami)"
+          echo "Authenticated to npm as: ${NPM_USER}"
+
+          case "${NPM_USER}" in
+            abeldagne|jonathan_dinh|josssiiiah)
+              ;;
+            *)
+              echo "Unexpected npm user for @oasiz/cli publish: ${NPM_USER}" >&2
+              echo "Update the NPM_TOKEN secret to a token owned by an @oasiz/cli maintainer." >&2
+              exit 1
+              ;;
+          esac
+
+          OWNER_LIST="$(npm owner ls @oasiz/cli)"
+          echo "${OWNER_LIST}"
+
+          if ! grep -q "^${NPM_USER} <" <<< "${OWNER_LIST}"; then
+            echo "npm user ${NPM_USER} is not an owner of @oasiz/cli." >&2
+            exit 1
+          fi
+
       - name: Semantic release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
