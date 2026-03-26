@@ -46,7 +46,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          NPM_USER="$(npm whoami)"
+          if [ -z "${NPM_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured for this workflow." >&2
+            exit 1
+          fi
+
+          if ! NPM_USER="$(npm whoami 2>/tmp/npm-whoami.err)"; then
+            cat /tmp/npm-whoami.err >&2
+            echo "Failed to authenticate to npm with NPM_TOKEN." >&2
+            echo "The token is missing, invalid, expired, or lacks access to the npm registry." >&2
+            exit 1
+          fi
+
           echo "Authenticated to npm as: ${NPM_USER}"
 
           case "${NPM_USER}" in
@@ -66,6 +77,8 @@ jobs:
             echo "npm user ${NPM_USER} is not an owner of @oasiz/cli." >&2
             exit 1
           fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Semantic release
         env:
