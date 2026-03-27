@@ -891,7 +891,9 @@ async function findOpenPort(): Promise<number> {
       reject(error);
     });
 
-    server.listen(0, "127.0.0.1", () => {
+    // Match the game-studio CLI so browser callbacks can resolve over either
+    // loopback family on machines where localhost prefers IPv6.
+    server.listen(0, "localhost", () => {
       const address = server.address();
       if (!address || typeof address === "string") {
         server.close(() => reject(new Error("Failed to allocate callback port.")));
@@ -1017,7 +1019,7 @@ async function runBrowserLoginFlow(openBrowser: boolean): Promise<BrowserLoginRe
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(callbackPort, "127.0.0.1", () => {
+    server.listen(callbackPort, "localhost", () => {
       resolve();
     });
   });
