@@ -4,6 +4,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { runCli } from "../src/index.ts";
+import { getWebBaseUrl } from "../src/lib/auth.ts";
 import { runUploadCli } from "../src/upload-cli.ts";
 
 test("runCli shows root help without throwing", async () => {
@@ -36,4 +37,28 @@ test("browser login callback binds listeners on localhost", async () => {
 
   assert.match(source, /server\.listen\(0,\s*"localhost"/);
   assert.match(source, /server\.listen\(callbackPort,\s*"localhost"/);
+});
+
+test("getWebBaseUrl defaults to production oasiz.ai", () => {
+  const originalWeb = process.env.OASIZ_WEB_URL;
+  const originalApi = process.env.OASIZ_API_URL;
+
+  delete process.env.OASIZ_WEB_URL;
+  delete process.env.OASIZ_API_URL;
+
+  try {
+    assert.equal(getWebBaseUrl(), "https://oasiz.ai");
+  } finally {
+    if (originalWeb === undefined) {
+      delete process.env.OASIZ_WEB_URL;
+    } else {
+      process.env.OASIZ_WEB_URL = originalWeb;
+    }
+
+    if (originalApi === undefined) {
+      delete process.env.OASIZ_API_URL;
+    } else {
+      process.env.OASIZ_API_URL = originalApi;
+    }
+  }
 });

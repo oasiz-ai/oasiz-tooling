@@ -10,7 +10,7 @@ export interface StoredCredentials {
 }
 
 const DEFAULT_API_BASE = "https://api.oasiz.ai";
-const DEFAULT_WEB_BASE = "http://localhost:5173";
+const DEFAULT_WEB_BASE = "https://oasiz.ai";
 
 function normalizeApiBase(raw: string): string {
   let value = raw.trim();
