@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { enableLogOverlay, oasiz } from "../src/index.ts";
+import {
+  getSafeAreaTop,
+  setLeaderboardVisible,
+} from "../src/layout.ts";
 import { onPause, onResume } from "../src/lifecycle.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "../src/navigation.ts";
 import {
@@ -311,6 +315,42 @@ test("loadGameState returns bridge state object", () => {
   );
 
   assert.deepEqual(state, { level: 3, inventory: ["key"] });
+});
+
+test("getSafeAreaTop returns 0 without bridge support", () => {
+  const safeAreaTop = withoutWindow(() => getSafeAreaTop());
+  assert.equal(safeAreaTop, 0);
+});
+
+test("getSafeAreaTop reads bridge-backed values", () => {
+  const safeAreaTop = withWindow(
+    {
+      getSafeAreaTop: () => 96,
+    },
+    () => getSafeAreaTop(),
+  );
+
+  assert.equal(safeAreaTop, 96);
+  assert.equal(
+    withWindow({ getSafeAreaTop: () => 32 }, () => oasiz.safeAreaTop),
+    32,
+  );
+});
+
+test("setLeaderboardVisible calls bridge when available", () => {
+  const calls: boolean[] = [];
+
+  withWindow(
+    {
+      __oasizSetLeaderboardVisible: (visible: boolean) => calls.push(visible),
+    },
+    () => {
+      setLeaderboardVisible(false);
+      oasiz.setLeaderboardVisible(true);
+    },
+  );
+
+  assert.deepEqual(calls, [false, true]);
 });
 
 test("loadGameState falls back to empty object for non-object payloads", () => {

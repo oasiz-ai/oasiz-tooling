@@ -23,10 +23,19 @@ oasiz.saveGameState({ level, coins: 42 });
 // 3. Trigger haptics on key events
 oasiz.triggerHaptic("medium");
 
-// 4. Submit score when the game ends
+// 4. Respect the host's top safe area
+document.documentElement.style.setProperty(
+  "--safe-top",
+  `${oasiz.safeAreaTop}px`,
+);
+
+// 5. Submit score when the game ends
 oasiz.submitScore(score);
 
-// 5. Optionally surface console logs in-game while debugging
+// 6. Optionally hide the leaderboard while a custom overlay is open
+oasiz.setLeaderboardVisible(false);
+
+// 7. Optionally surface console logs in-game while debugging
 oasiz.enableLogOverlay({
   enabled: new URLSearchParams(window.location.search).has("oasizLogs"),
   collapsed: true,
@@ -175,6 +184,53 @@ private onGameOver(): void {
   oasiz.submitScore(this.score);
 }
 ```
+
+---
+
+## Layout
+
+Use the runtime safe-area value instead of hardcoded top offsets. The host reports the current top inset in CSS pixels for persistent chrome such as the back button and top controls.
+
+### `oasiz.getSafeAreaTop(): number`
+
+Returns the current top inset. Unsupported hosts return `0`.
+
+```ts
+const safeTop = oasiz.getSafeAreaTop();
+document.documentElement.style.setProperty("--safe-top", `${safeTop}px`);
+```
+
+### `oasiz.safeAreaTop`
+
+Getter alias for `getSafeAreaTop()`.
+
+Recommended CSS pattern:
+
+```css
+:root {
+  --safe-top: 0px;
+}
+
+#top-bar {
+  padding-top: var(--safe-top);
+}
+```
+
+### `oasiz.setLeaderboardVisible(visible: boolean): void`
+
+Show or hide the host leaderboard UI from inside the game. This only affects the leaderboard; back and social controls remain visible.
+
+```ts
+function openCustomOverlay(): void {
+  oasiz.setLeaderboardVisible(false);
+}
+
+function closeCustomOverlay(): void {
+  oasiz.setLeaderboardVisible(true);
+}
+```
+
+Unsupported hosts safely no-op.
 
 ---
 

@@ -11,6 +11,7 @@ import {
 import { submitScore } from "./score.ts";
 import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
+import { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
 
 export { triggerHaptic } from "./haptics.ts";
@@ -27,6 +28,7 @@ export type { ShareRoomCodeOptions } from "./multiplayer.ts";
 export { submitScore } from "./score.ts";
 export { flushGameState, loadGameState, saveGameState } from "./state.ts";
 export { onPause, onResume } from "./lifecycle.ts";
+export { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
 export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
 export type { Unsubscribe } from "./lifecycle.ts";
 export type {
@@ -49,6 +51,8 @@ export const oasiz = {
   openInviteModal,
   onPause,
   onResume,
+  getSafeAreaTop,
+  setLeaderboardVisible,
   onBackButton,
   onLeaveGame,
   leaveGame,
@@ -63,5 +67,8 @@ export const oasiz = {
   },
   get playerAvatar(): string | undefined {
     return getPlayerAvatar();
+  },
+  get safeAreaTop(): number {
+    return getSafeAreaTop();
   },
 };
