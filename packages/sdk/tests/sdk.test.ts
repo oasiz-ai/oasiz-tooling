@@ -41,6 +41,27 @@ function withoutWindow<T>(run: () => T): T {
   }
 }
 
+class NavigationTarget {
+  private listeners = new Map<string, Set<EventListener>>();
+
+  addEventListener(type: string, listener: EventListener): void {
+    const current = this.listeners.get(type) ?? new Set<EventListener>();
+    current.add(listener);
+    this.listeners.set(type, current);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatchEvent(event: Event): boolean {
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      listener.call(this, event);
+    }
+    return true;
+  }
+}
+
 class FakeElement {
   children: FakeElement[] = [];
   parentNode: FakeElement | null = null;
@@ -522,6 +543,7 @@ test("leaveGame calls bridge when available", () => {
 test("onBackButton subscribes, toggles override bridge, and unsubscribes", () => {
   const target = new EventTarget();
   const overrideCalls: boolean[] = [];
+  let leaveGameCalls = 0;
 
   withWindow(
     {
@@ -530,6 +552,9 @@ test("onBackButton subscribes, toggles override bridge, and unsubscribes", () =>
       dispatchEvent: target.dispatchEvent.bind(target),
       __oasizSetBackOverride: (active: boolean) => {
         overrideCalls.push(active);
+      },
+      __oasizLeaveGame: () => {
+        leaveGameCalls += 1;
       },
     },
     () => {
@@ -548,6 +573,69 @@ test("onBackButton subscribes, toggles override bridge, and unsubscribes", () =>
   );
 
   assert.deepEqual(overrideCalls, [true, false]);
+  assert.equal(leaveGameCalls, 0);
+});
+
+test("onBackButton falls back to leaveGame and rethrows callback errors", () => {
+  const target = new NavigationTarget();
+  let leaveGameCalls = 0;
+
+  withWindow(
+    {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      __oasizSetBackOverride: () => {},
+      __oasizLeaveGame: () => {
+        leaveGameCalls += 1;
+      },
+    },
+    () => {
+      const expected = new Error("boom");
+      const off = onBackButton(() => {
+        throw expected;
+      });
+
+      assert.throws(
+        () => target.dispatchEvent(new Event("oasiz:back")),
+        (error: unknown) => error === expected,
+      );
+
+      off();
+    },
+  );
+
+  assert.equal(leaveGameCalls, 1);
+});
+
+test("onBackButton normalizes non-Error throws before rethrowing", () => {
+  const target = new NavigationTarget();
+  let leaveGameCalls = 0;
+
+  withWindow(
+    {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      __oasizSetBackOverride: () => {},
+      __oasizLeaveGame: () => {
+        leaveGameCalls += 1;
+      },
+    },
+    () => {
+      const off = onBackButton(() => {
+        throw "boom";
+      });
+
+      assert.throws(
+        () => target.dispatchEvent(new Event("oasiz:back")),
+        (error: unknown) =>
+          error instanceof Error && error.message === "boom",
+      );
+
+      off();
+    },
+  );
+
+  assert.equal(leaveGameCalls, 1);
 });
 
 test("onLeaveGame subscribes and unsubscribes from leave event", () => {

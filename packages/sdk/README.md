@@ -271,6 +271,8 @@ Registers a callback for platform back actions. While at least one back listener
 
 Use this for pause menus, in-game overlays, or custom back-stack behavior.
 
+If your callback throws, Oasiz falls back to closing the game and returning the player to Oasiz home before rethrowing the error for debugging/reporting.
+
 ```ts
 const offBack = oasiz.onBackButton(() => {
   if (this.isPauseMenuOpen) {

@@ -32,6 +32,16 @@ function warnMissingBridge(methodName: string): void {
   }
 }
 
+function normalizeNavigationError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+
+  return new Error(
+    typeof error === "string" ? error : "Back button callback failed.",
+  );
+}
+
 function addNavigationListener(
   eventName: NavigationEventName,
   callback: () => void,
@@ -53,7 +63,14 @@ function addNavigationListener(
 }
 
 export function onBackButton(callback: () => void): Unsubscribe {
-  const off = addNavigationListener("oasiz:back", callback);
+  const off = addNavigationListener("oasiz:back", () => {
+    try {
+      callback();
+    } catch (error) {
+      leaveGame();
+      throw normalizeNavigationError(error);
+    }
+  });
   const bridge = getBridgeWindow();
 
   activeBackListeners += 1;
