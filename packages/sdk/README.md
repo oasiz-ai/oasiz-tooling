@@ -296,6 +296,17 @@ quitButton.addEventListener("click", () => {
 });
 ```
 
+### `oasiz.share(options: { text?: string; score?: number; image?: string }): Promise<void>`
+
+Ask the host to open the same share flow Oasiz already uses today. Use `text` to customize the share message, `score` to trigger a challenge-style share, and `image` to share an `http(s)` URL or `data:image/...` payload.
+
+```ts
+await oasiz.share({
+  text: "I made it to level 9!",
+  score: 4200,
+});
+```
+
 ### `oasiz.onLeaveGame(callback: () => void): Unsubscribe`
 
 Registers a callback fired when the host initiates closing the game (for example, close button, gesture, or host navigation). Use this for lightweight cleanup.

@@ -25,3 +25,9 @@ export interface LogOverlayHandle {
 }
 
 export type GameState = Record<string, unknown>;
+
+export interface ShareRequest {
+  image?: string;
+  score?: number;
+  text?: string;
+}

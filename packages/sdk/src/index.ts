@@ -9,6 +9,7 @@ import {
   shareRoomCode,
 } from "./multiplayer.ts";
 import { submitScore } from "./score.ts";
+import { share } from "./share.ts";
 import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
 import { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
@@ -26,6 +27,7 @@ export {
 } from "./multiplayer.ts";
 export type { ShareRoomCodeOptions } from "./multiplayer.ts";
 export { submitScore } from "./score.ts";
+export { share } from "./share.ts";
 export { flushGameState, loadGameState, saveGameState } from "./state.ts";
 export { onPause, onResume } from "./lifecycle.ts";
 export { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
@@ -38,10 +40,12 @@ export type {
   LogOverlayHandle,
   LogOverlayLevel,
   LogOverlayOptions,
+  ShareRequest,
 } from "./types.ts";
 
 export const oasiz = {
   submitScore,
+  share,
   triggerHaptic,
   enableLogOverlay,
   loadGameState,

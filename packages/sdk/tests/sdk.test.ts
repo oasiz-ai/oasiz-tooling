@@ -17,6 +17,7 @@ import {
   shareRoomCode,
 } from "../src/multiplayer.ts";
 import { submitScore } from "../src/score.ts";
+import { share } from "../src/share.ts";
 import { flushGameState, loadGameState, saveGameState } from "../src/state.ts";
 
 function withWindow<T>(value: unknown, run: () => T): T {
@@ -455,6 +456,61 @@ test("openInviteModal calls bridge when available", () => {
   );
 
   assert.equal(calls, 2);
+});
+
+test("share rejects empty requests", async () => {
+  await assert.rejects(
+    () => share({}),
+    /Share request requires text, score, or image/,
+  );
+});
+
+test("share rejects invalid scores", async () => {
+  await assert.rejects(
+    () => share({ score: 3.5 }),
+    /Share score must be a non-negative integer/,
+  );
+});
+
+test("share rejects invalid image references", async () => {
+  await assert.rejects(
+    () => share({ image: "ftp://example.com/share.png" }),
+    /Share image must be an http\(s\) URL or a data:image/,
+  );
+});
+
+test("share rejects when bridge is unavailable", async () => {
+  await withoutWindow(async () => {
+    await assert.rejects(
+      () => share({ text: "hello" }),
+      /Share bridge unavailable/,
+    );
+  });
+});
+
+test("share validates and forwards requests to the host bridge", async () => {
+  let request: Record<string, unknown> | null = null;
+
+  await withWindow(
+    {
+      __oasizShareRequest: async (nextRequest: Record<string, unknown>) => {
+        request = nextRequest;
+      },
+    },
+    async () => {
+      await share({
+        text: "  Beat this  ",
+        score: 42,
+        image: "https://example.com/share.png",
+      });
+    },
+  );
+
+  assert.deepEqual(request, {
+    text: "Beat this",
+    score: 42,
+    image: "https://example.com/share.png",
+  });
 });
 
 test("multiplayer getters return injected values", () => {
