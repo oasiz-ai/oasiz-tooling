@@ -344,18 +344,49 @@ test("getSafeAreaTop returns 0 without bridge support", () => {
   assert.equal(safeAreaTop, 0);
 });
 
-test("getSafeAreaTop reads bridge-backed values", () => {
+test("getSafeAreaTop converts pixel bridge to percent of viewport height", () => {
   const safeAreaTop = withWindow(
     {
       getSafeAreaTop: () => 96,
+      innerHeight: 800,
     },
     () => getSafeAreaTop(),
   );
 
-  assert.equal(safeAreaTop, 96);
+  assert.equal(safeAreaTop, 12);
   assert.equal(
-    withWindow({ getSafeAreaTop: () => 32 }, () => oasiz.safeAreaTop),
-    32,
+    withWindow(
+      { getSafeAreaTop: () => 32, innerHeight: 800 },
+      () => oasiz.safeAreaTop,
+    ),
+    4,
+  );
+});
+
+test("getSafeAreaTop uses percent bridge when present", () => {
+  assert.equal(
+    withWindow(
+      {
+        getSafeAreaTopPercent: () => 8.5,
+        getSafeAreaTop: () => 999,
+        innerHeight: 800,
+      },
+      () => getSafeAreaTop(),
+    ),
+    8.5,
+  );
+  assert.equal(
+    withWindow({ __OASIZ_SAFE_AREA_TOP_PERCENT__: 15 }, () => getSafeAreaTop()),
+    15,
+  );
+});
+
+test("getSafeAreaTop returns 0 when viewport height is unavailable", () => {
+  assert.equal(
+    withWindow({ getSafeAreaTop: () => 96, innerHeight: 0 }, () =>
+      getSafeAreaTop(),
+    ),
+    0,
   );
 });
 
