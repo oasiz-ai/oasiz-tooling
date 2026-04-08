@@ -326,9 +326,11 @@ namespace Oasiz
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Top safe-area inset in CSS pixels for persistent host chrome (back button,
-    /// top controls). Prefer this over hardcoded offsets. Returns 0 when the host
-    /// does not inject a value.
+    /// Top safe-area inset as a percentage of the WebGL viewport height (0–100).
+    /// Convert to pixels with <c>GetSafeAreaTop() / 100f * Screen.height</c>.
+    /// The host may supply CSS pixels (converted in the bridge) or
+    /// <c>getSafeAreaTopPercent</c> / <c>__OASIZ_SAFE_AREA_TOP_PERCENT__</c>.
+    /// Returns 0 when the host does not inject a value.
     /// </summary>
     public static float GetSafeAreaTop()
     {
