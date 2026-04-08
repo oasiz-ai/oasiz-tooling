@@ -8,6 +8,8 @@ Typed SDK for integrating games with the Oasiz platform. Handles score submissio
 npm install @oasiz/sdk
 ```
 
+The published package includes ESM, CommonJS, and TypeScript declarations.
+
 ## Quick start
 
 ```ts
