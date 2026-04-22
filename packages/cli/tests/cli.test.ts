@@ -39,6 +39,20 @@ test("browser login callback binds listeners on localhost", async () => {
   assert.match(source, /server\.listen\(callbackPort,\s*"localhost"/);
 });
 
+test("api errors include target request URL", async () => {
+  const apiPath = fileURLToPath(new URL("../src/lib/api.ts", import.meta.url));
+  const source = await readFile(apiPath, "utf8");
+
+  assert.match(source, /function summarizeErrorBody\(raw: string\)/);
+  assert.match(source, /const requestUrl = getApiUrl\(path\)/);
+  assert.match(source, /Unable to connect to API\./);
+  assert.match(source, /Target URL: " \+ requestUrl/);
+  assert.match(source, /Request failed \(/);
+  assert.match(source, /\) for " \+/);
+  assert.match(source, /requestUrl \+/);
+  assert.match(source, /Response preview: "/);
+});
+
 test("getWebBaseUrl defaults to production oasiz.ai", () => {
   const originalWeb = process.env.OASIZ_WEB_URL;
   const originalApi = process.env.OASIZ_API_URL;
@@ -61,4 +75,13 @@ test("getWebBaseUrl defaults to production oasiz.ai", () => {
       process.env.OASIZ_API_URL = originalApi;
     }
   }
+});
+
+test("upload CLI keeps login-based auth flow", async () => {
+  const uploadCliPath = fileURLToPath(new URL("../src/upload-cli.ts", import.meta.url));
+  const source = await readFile(uploadCliPath, "utf8");
+
+  assert.match(source, /await requireAuthToken\(\)/);
+  assert.match(source, /await readStoredCredentials\(\)/);
+  assert.match(source, /No creator email found in saved login credentials/);
 });

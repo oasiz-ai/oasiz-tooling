@@ -1,0 +1,1423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, minimal-ui">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Wave Mode</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Sora:wght@400;600;800&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            background: #0a0a1a;
+            font-family: 'Sora', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        :root {
+            --ui-font: 'Press Start 2P', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+            --ui-fg: #e8fbff;
+            --ui-accent: rgba(120, 255, 244, 1);
+            --ui-accent-soft: rgba(120, 255, 244, 0.22);
+            --ui-bg: rgba(5, 4, 13, 0.78);
+            --ui-border: rgba(210, 255, 240, 0.80);
+            --ui-shadow: rgba(0, 0, 0, 0.85);
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Pixel UI: font + sharp, blocky styling (keeps gameplay canvas unchanged) */
+        #ui, #ui button, #ui input, #ui select {
+            font-family: var(--ui-font);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        #ui {
+            text-rendering: geometricPrecision;
+        }
+
+        /* HUD */
+        #hud {
+            font-size: 14px;
+            font-weight: 400;
+            text-shadow: 2px 2px 0 rgba(0,0,0,0.70), 0 0 10px rgba(120,255,244,0.20);
+        }
+        #distance { font-size: 18px; }
+        #highScore { display: none; }
+
+        /* Pixel buttons (menus + overlays) */
+        #ui .menuBtn,
+        #ui .overlay button {
+            border-radius: 0;
+            border: 3px solid var(--ui-border);
+            background: var(--ui-bg);
+            color: var(--ui-fg);
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 18px var(--ui-accent-soft);
+            transition: transform 0.12s ease, box-shadow 0.18s ease, background 0.18s ease;
+        }
+
+        #ui .menuBtn {
+            font-size: 12px;
+            padding: 14px 14px;
+        }
+
+        #ui .overlay button {
+            font-size: 12px;
+            padding: 14px 18px;
+        }
+
+        /* Remove glossy/glitter effects for a clean pixel look */
+        #ui .menuBtn::before,
+        #ui .menuBtn::after {
+            display: none !important;
+            content: none !important;
+        }
+
+        #ui .menuBtn:hover,
+        #ui .overlay button:hover {
+            transform: translateY(-2px);
+            background: rgba(10, 12, 28, 0.82);
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 26px rgba(120,255,244,0.30);
+        }
+
+        #ui .menuBtn:active,
+        #ui .overlay button:active {
+            transform: translateY(1px);
+        }
+
+        #ui .menuBtn.primary {
+            border-color: rgba(120, 255, 244, 0.95);
+            background: rgba(120, 255, 244, 0.14);
+            color: var(--ui-fg);
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 28px rgba(120,255,244,0.34);
+        }
+
+        /* Titles / text */
+        #ui .menuTitle,
+        #ui .overlay h1 {
+            background: none !important;
+            -webkit-text-fill-color: currentColor !important;
+            color: var(--ui-fg);
+            text-shadow: 3px 3px 0 rgba(0,0,0,0.78), 0 0 18px rgba(120,255,244,0.22);
+            letter-spacing: 0.06em;
+        }
+
+        #ui .menuTitle {
+            font-size: clamp(22px, 5.2vw, 34px);
+        }
+
+        #ui .overlay h1 {
+            font-size: 28px;
+        }
+
+        #ui .menuSub,
+        #ui .overlay p,
+        #ui .menuFooter,
+        #ui .menuKicker {
+            font-size: 12px;
+            line-height: 1.55;
+        }
+
+        #ui .pill {
+            border-radius: 0;
+            border: 2px solid rgba(255,255,255,0.14);
+            background: rgba(0,0,0,0.28);
+            font-size: 10px;
+            padding: 8px 10px;
+            text-shadow: 2px 2px 0 rgba(0,0,0,0.65);
+        }
+
+        /* Pixel icon buttons */
+        #pauseBtn, #settingsBtn {
+            border-radius: 0 !important;
+            border-width: 3px !important;
+            background: var(--ui-bg) !important;
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 16px rgba(120,255,244,0.20) !important;
+        }
+        #pauseBtn:hover, #settingsBtn:hover {
+            transform: translateY(-2px) !important;
+            background: rgba(10, 12, 28, 0.82) !important;
+        }
+        #pauseBtn:active, #settingsBtn:active {
+            transform: translateY(1px) !important;
+        }
+
+        /* Settings sheet */
+        .settingsBackdrop {
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        .settingsSheet {
+            border-radius: 0 !important;
+            border: 3px solid rgba(210,255,240,0.34);
+            background: rgba(5,4,13,0.92);
+            box-shadow: 0 0 0 3px var(--ui-shadow) inset, 0 0 22px rgba(120,255,244,0.18);
+        }
+
+
+        /* UI Overlay */
+        #ui {
+            /* Keep UI aligned to the game container (important when we rotate the container on mobile portrait). */
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+
+        #hud {
+            position: absolute;
+            top: 45px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.8), 0 0 20px rgba(0, 255, 255, 0.6);
+            pointer-events: none;
+            transition: opacity 0.32s ease, transform 0.32s ease, filter 0.32s ease;
+        }
+
+        .uiHidden {
+            opacity: 0;
+            transform: translateY(-10px);
+            filter: blur(3px);
+            pointer-events: none !important;
+        }
+
+        #distance {
+            font-size: 18px;
+        }
+
+        #highScore {
+            display: none;
+        }
+
+        #pauseBtn {
+            position: absolute;
+            top: 45px;
+            left: 20px;
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 8px;
+            cursor: pointer;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            transition: all 0.2s;
+        }
+
+        #pauseBtn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        #pauseBtn:active {
+            transform: scale(0.95);
+        }
+
+        /* Overlays (Start/Game Over/Pause) */
+        .overlay {
+            /* Keep overlays aligned to the game container (important when we rotate the container on mobile portrait). */
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 200;
+            pointer-events: auto;
+            transition: opacity 0.35s ease, transform 0.35s ease;
+            box-sizing: border-box;
+
+            /* Cinematic sci-fi dim */
+            background:
+                radial-gradient(1200px 700px at 50% 40%, rgba(0, 255, 255, 0.10), rgba(0, 0, 0, 0.92) 60%),
+                radial-gradient(900px 600px at 60% 60%, rgba(255, 255, 0, 0.08), rgba(0, 0, 0, 0) 65%),
+                rgba(0, 0, 0, 0.88);
+        }
+
+        .overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+            visibility: hidden;
+            transform: translateY(8px);
+        }
+
+        /* Menu -> Play transition */
+        #startOverlay {
+            will-change: opacity, transform, filter;
+            overflow: hidden;
+            isolation: isolate;
+
+            /* Start screen gets its own vibe (gameplay overlays keep the cinematic dim) */
+            background:
+                radial-gradient(1200px 700px at 50% 35%, rgba(0, 255, 255, 0.14), rgba(0, 0, 0, 0.92) 62%),
+                radial-gradient(900px 600px at 60% 70%, rgba(255, 255, 0, 0.10), rgba(0, 0, 0, 0) 66%),
+                rgba(0, 0, 0, 0.88);
+        }
+
+        /* Start screen background: fewer criss-cross lines that form in staggered orders */
+        .startLines {
+            position: absolute;
+            inset: -22%;
+            pointer-events: none;
+            z-index: 0;
+            mix-blend-mode: screen;
+            filter: drop-shadow(0 0 10px rgba(0,255,255,0.10));
+            opacity: 0.95;
+        }
+
+        /* Soft color fields behind the lines (makes “between the lines” feel alive) */
+        .startLines::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(900px 600px at 30% 40%, rgba(120,255,244,0.10), rgba(0,0,0,0) 60%),
+                radial-gradient(900px 600px at 70% 55%, rgba(255,120,220,0.09), rgba(0,0,0,0) 62%),
+                radial-gradient(900px 600px at 55% 30%, rgba(108,92,255,0.08), rgba(0,0,0,0) 64%);
+            opacity: 0.75;
+            transform: translate3d(0,0,0);
+            animation: auroraDrift 10s ease-in-out infinite;
+            will-change: transform, opacity;
+        }
+
+        @keyframes auroraDrift {
+            0%   { transform: translate(-1.2%, -0.8%) scale(1.02); opacity: 0.62; }
+            50%  { transform: translate(1.0%, 0.9%) scale(1.04); opacity: 0.82; }
+            100% { transform: translate(-1.2%, -0.8%) scale(1.02); opacity: 0.62; }
+        }
+
+        .startLines span {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            clip-path: inset(0 100% 0 0);
+            transform: translateX(0) translateY(0);
+            will-change: opacity, clip-path, transform;
+        }
+
+        /* Reveal directions to create "different order" feeling */
+        @keyframes formLR {
+            0%   { opacity: 0; clip-path: inset(0 100% 0 0); transform: translateX(-1.5%); }
+            14%  { opacity: 0.65; }
+            52%  { opacity: 0.95; clip-path: inset(0 0% 0 0); transform: translateX(0%); }
+            78%  { opacity: 0.30; }
+            100% { opacity: 0; clip-path: inset(0 0% 0 0); }
+        }
+
+        @keyframes formRL {
+            0%   { opacity: 0; clip-path: inset(0 0 0 100%); transform: translateX(1.5%); }
+            14%  { opacity: 0.60; }
+            52%  { opacity: 0.90; clip-path: inset(0 0 0 0%); transform: translateX(0%); }
+            78%  { opacity: 0.28; }
+            100% { opacity: 0; clip-path: inset(0 0 0 0%); }
+        }
+
+        @keyframes formTB {
+            0%   { opacity: 0; clip-path: inset(100% 0 0 0); transform: translateY(-1.5%); }
+            14%  { opacity: 0.62; }
+            52%  { opacity: 0.92; clip-path: inset(0% 0 0 0); transform: translateY(0%); }
+            78%  { opacity: 0.28; }
+            100% { opacity: 0; clip-path: inset(0% 0 0 0); }
+        }
+
+        @keyframes formBT {
+            0%   { opacity: 0; clip-path: inset(0 0 100% 0); transform: translateY(1.5%); }
+            14%  { opacity: 0.60; }
+            52%  { opacity: 0.90; clip-path: inset(0 0 0% 0); transform: translateY(0%); }
+            78%  { opacity: 0.28; }
+            100% { opacity: 0; clip-path: inset(0 0 0% 0); }
+        }
+
+        /* Layer styles (less dense lines, criss-cross angles) */
+        .startLines span:nth-child(1) {
+            /* Cyan bands + bright line: adds color BETWEEN the lines */
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(120,255,244,0.06) 0px,
+                rgba(120,255,244,0.06) 42px,
+                rgba(120,255,244,0.28) 42px,
+                rgba(120,255,244,0.28) 44px,
+                rgba(120,255,244,0.03) 44px,
+                rgba(120,255,244,0.03) 86px
+            );
+            animation: formLR 6.0s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+        }
+        .startLines span:nth-child(2) {
+            /* Violet/white bands */
+            background: repeating-linear-gradient(
+                -45deg,
+                rgba(108,92,255,0.05) 0px,
+                rgba(108,92,255,0.05) 56px,
+                rgba(255,255,255,0.18) 56px,
+                rgba(255,255,255,0.18) 58px,
+                rgba(108,92,255,0.028) 58px,
+                rgba(108,92,255,0.028) 112px
+            );
+            animation: formTB 6.6s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+            animation-delay: 0.35s;
+        }
+        .startLines span:nth-child(3) {
+            /* Warm gold bands */
+            background: repeating-linear-gradient(
+                45deg,
+                rgba(255,209,102,0.045) 0px,
+                rgba(255,209,102,0.045) 68px,
+                rgba(255,209,102,0.16) 68px,
+                rgba(255,209,102,0.16) 70px,
+                rgba(255,209,102,0.022) 70px,
+                rgba(255,209,102,0.022) 136px
+            );
+            animation: formRL 7.2s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+            animation-delay: 0.75s;
+        }
+        .startLines span:nth-child(4) {
+            /* Magenta/teal accent bands */
+            background: repeating-linear-gradient(
+                -45deg,
+                rgba(255,120,220,0.045) 0px,
+                rgba(255,120,220,0.045) 50px,
+                rgba(255,120,220,0.16) 50px,
+                rgba(255,120,220,0.16) 52px,
+                rgba(120,255,244,0.018) 52px,
+                rgba(120,255,244,0.018) 100px
+            );
+            animation: formBT 6.4s cubic-bezier(0.2, 0.9, 0.2, 1) infinite;
+            animation-delay: 1.1s;
+        }
+
+        /* Title + Start button animations (smooth, but still pixel-UI friendly) */
+        @keyframes titleFloat {
+            0%   { transform: translateY(0px); filter: drop-shadow(0 0 0 rgba(0,0,0,0)); }
+            50%  { transform: translateY(-8px); filter: drop-shadow(0 0 24px rgba(120,255,244,0.45)); }
+            100% { transform: translateY(0px); filter: drop-shadow(0 0 0 rgba(0,0,0,0)); }
+        }
+
+        @keyframes titleIn {
+            0%   { opacity: 0; transform: translateY(20px) scale(0.92); filter: blur(4px); }
+            100% { opacity: 1; transform: translateY(0px) scale(1); filter: blur(0px); }
+        }
+
+        @keyframes startPulse {
+            0%   { box-shadow: 0 0 0 3px rgba(0,0,0,0.85) inset, 0 0 24px rgba(120,255,244,0.28); transform: translateY(0); }
+            50%  { box-shadow: 0 0 0 3px rgba(0,0,0,0.85) inset, 0 0 48px rgba(120,255,244,0.55); transform: translateY(-3px); }
+            100% { box-shadow: 0 0 0 3px rgba(0,0,0,0.85) inset, 0 0 24px rgba(120,255,244,0.28); transform: translateY(0); }
+        }
+
+        #startOverlay:not(.leaving) .menuTitle {
+            animation: titleIn 0.55s cubic-bezier(0.2, 0.9, 0.2, 1) both, titleFloat 2.2s ease-in-out infinite;
+        }
+
+        #startOverlay:not(.leaving) #playBtn {
+            animation: startPulse 1.3s ease-in-out infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .startLines::before,
+            .startLines span,
+            #startOverlay .menuTitle,
+            #startOverlay #playBtn {
+                animation: none !important;
+            }
+        }
+
+        #startOverlay.leaving {
+            opacity: 0;
+            transform: translateY(-10px) scale(1.02);
+            filter: blur(3px);
+        }
+
+        /* Start screen: full-screen scene container (not a card/modal) */
+        .startScene {
+            position: relative;
+            z-index: 2;
+            width: min(860px, calc(100% - 40px));
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        /* Start menu minimal layout (title + 2 buttons only) */
+        #startOverlay .menuTitle {
+            margin: 0 0 18px 0;
+        }
+        #startOverlay .menuButtons {
+            margin-top: 0;
+        }
+
+        #startOverlay .startScene {
+            transition: transform 0.32s ease, filter 0.32s ease;
+        }
+
+        #startOverlay.leaving .startScene {
+            transform: translateY(-6px) scale(0.985);
+            filter: blur(1px);
+        }
+
+        .overlay-content {
+            text-align: center;
+            color: #fff;
+            opacity: 0;
+            transform: translateY(10px) scale(0.98);
+            transition: opacity 0.35s ease, transform 0.35s ease;
+        }
+
+        /* Pop the overlay content in smoothly (Game Over / Pause especially) */
+        .overlay:not(.hidden) .overlay-content {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+
+        /* Game Over: title + button zoom-in */
+        @keyframes goZoomIn {
+            0% { opacity: 0; transform: translateY(10px) scale(0.92); filter: blur(2px); }
+            100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0px); }
+        }
+
+        #gameOverOverlay:not(.hidden) h1 {
+            animation: goZoomIn 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+            animation-delay: 0.02s;
+        }
+
+        #gameOverOverlay:not(.hidden) #restartBtn {
+            animation: goZoomIn 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+            animation-delay: 0.26s;
+        }
+
+        /* Menu (Start Screen) */
+        .menuShell {
+            position: relative;
+            width: min(720px, calc(100vw - 40px));
+            padding: 22px;
+        }
+
+        .menuCard {
+            position: relative;
+            border-radius: 18px;
+            padding: 28px 26px 22px;
+            background: rgba(12, 10, 25, 0.75);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            box-shadow:
+                0 14px 50px rgba(0, 0, 0, 0.55),
+                0 0 0 1px rgba(0, 255, 255, 0.10) inset;
+            overflow: hidden;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transform: translateZ(0);
+        }
+
+        .menuCard::before {
+            content: "";
+            position: absolute;
+            inset: -2px;
+            background: linear-gradient(120deg, rgba(0,255,255,0.0), rgba(0,255,255,0.55), rgba(255,255,0,0.45), rgba(255,0,255,0.30), rgba(0,255,255,0.0));
+            background-size: 260% 260%;
+            filter: blur(10px);
+            opacity: 0.55;
+            animation: borderGlow 5.5s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        .menuCard::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(700px 240px at 30% 20%, rgba(0,255,255,0.12), rgba(0,0,0,0) 60%),
+                radial-gradient(520px 260px at 70% 70%, rgba(255,255,0,0.08), rgba(0,0,0,0) 65%),
+                linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0));
+            opacity: 0.85;
+            pointer-events: none;
+        }
+
+        @keyframes borderGlow {
+            0% { background-position: 0% 50%; opacity: 0.45; }
+            50% { background-position: 100% 50%; opacity: 0.70; }
+            100% { background-position: 0% 50%; opacity: 0.45; }
+        }
+
+        .menuKicker {
+            font-size: 12px;
+            letter-spacing: 0.32em;
+            text-transform: uppercase;
+            opacity: 0.78;
+            margin-bottom: 10px;
+        }
+
+        .menuTitle {
+            font-size: clamp(34px, 7.2vw, 56px);
+            letter-spacing: 0.06em;
+            margin: 0 0 10px 0;
+            text-shadow: 0 0 32px rgba(0, 255, 255, 0.65), 0 0 72px rgba(0, 255, 255, 0.32);
+            background: linear-gradient(45deg, #eaffff, #00ffff, #ffff7a);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .menuSub {
+            font-size: clamp(13px, 2.4vw, 16px);
+            opacity: 0.86;
+            margin-bottom: 18px;
+            line-height: 1.35;
+        }
+
+        .menuPills {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 18px 0 22px;
+        }
+
+        .pill {
+            padding: 9px 12px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.16);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.92);
+            font-size: 13px;
+            text-shadow: 0 0 18px rgba(0,255,255,0.18);
+        }
+
+        .menuButtons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 10px;
+        }
+
+        .menuBtn {
+            position: relative;
+            padding: 14px 16px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(255,255,255,0.08);
+            color: #f7feff;
+            box-shadow: 0 0 0 rgba(0,0,0,0);
+            transition: transform 0.15s ease, box-shadow 0.25s ease, background 0.25s ease;
+            overflow: hidden;
+        }
+
+        .menuBtn::before {
+            content: "";
+            position: absolute;
+            top: -40%;
+            left: -60%;
+            width: 40%;
+            height: 180%;
+            background: linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.55), rgba(255,255,255,0.0));
+            transform: rotate(20deg);
+            opacity: 0.0;
+            transition: opacity 0.25s ease;
+        }
+
+        .menuBtn:hover {
+            transform: translateY(-4px);
+            background: rgba(255,255,255,0.16);
+            box-shadow: 0 0 42px rgba(0, 255, 255, 0.38);
+        }
+
+        .menuBtn:hover::before {
+            opacity: 1;
+            animation: shine 1.1s ease forwards;
+        }
+
+        /* Glitter layer: subtle sparkles + sweep (always on, stronger on primary) */
+        .menuBtn::after {
+            content: "";
+            position: absolute;
+            inset: -60%;
+            pointer-events: none;
+            opacity: 0.0;
+            transform: rotate(20deg) translateX(-20%);
+            background:
+                radial-gradient(circle at 18% 40%, rgba(255,255,255,1.0) 0 1px, rgba(255,255,255,0.0) 2px),
+                radial-gradient(circle at 38% 70%, rgba(255,255,255,0.75) 0 1px, rgba(255,255,255,0.0) 2px),
+                radial-gradient(circle at 66% 30%, rgba(255,255,255,0.85) 0 1px, rgba(255,255,255,0.0) 2px),
+                radial-gradient(circle at 78% 62%, rgba(255,255,255,0.65) 0 1px, rgba(255,255,255,0.0) 2px),
+                linear-gradient(90deg, rgba(255,255,255,0.0), rgba(255,255,255,0.38), rgba(255,255,255,0.0));
+            mix-blend-mode: screen;
+            filter: drop-shadow(0 0 12px rgba(0,255,255,0.20));
+            animation: btnGlitter 1.6s ease-in-out infinite;
+        }
+
+        .menuBtn.primary::after {
+            filter: drop-shadow(0 0 16px rgba(0,255,255,0.35));
+            animation-duration: 1.3s;
+        }
+
+        @keyframes btnGlitter {
+            0%   { opacity: 0.00; transform: rotate(20deg) translateX(-26%); }
+            22%  { opacity: 0.95; }
+            45%  { opacity: 0.35; }
+            70%  { opacity: 0.80; }
+            100% { opacity: 0.00; transform: rotate(20deg) translateX(26%); }
+        }
+
+        @keyframes shine {
+            0% { left: -60%; }
+            100% { left: 130%; }
+        }
+
+        .menuBtn:active {
+            transform: translateY(1px) scale(0.99);
+        }
+
+        .menuBtn.primary {
+            background: linear-gradient(45deg, rgba(0,255,255,0.92), rgba(255,255,0,0.88));
+            color: rgba(0,0,0,0.90);
+            border: none;
+            box-shadow: 0 0 38px rgba(0,255,255,0.50);
+        }
+
+        .menuBtn.primary:hover {
+            box-shadow: 0 0 52px rgba(0,255,255,0.75);
+        }
+
+        .menuFooter {
+            margin-top: 14px;
+            font-size: 12px;
+            opacity: 0.72;
+            letter-spacing: 0.08em;
+        }
+
+        .overlay h1 {
+            font-size: 48px;
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px rgba(0, 255, 255, 0.8), 0 0 40px rgba(0, 255, 255, 0.4);
+            background: linear-gradient(45deg, #00ffff, #ffff00);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .overlay p {
+            font-size: 20px;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+
+        .overlay button {
+            padding: 15px 40px;
+            font-size: 24px;
+            background: linear-gradient(45deg, #00ffff, #ffff00);
+            border: none;
+            border-radius: 8px;
+            color: #000;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.5);
+
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.35s ease, transform 0.35s ease, box-shadow 0.2s, background 0.2s;
+            transition-delay: 0s;
+        }
+
+        .overlay:not(.hidden) .overlay-content button {
+            opacity: 1;
+            transform: translateY(0);
+            transition-delay: 0.18s;
+        }
+
+        /* Slightly later for Game Over buttons so the title lands first */
+        #gameOverOverlay:not(.hidden) .overlay-content button {
+            transition-delay: 0.24s;
+        }
+        /* Settings overlay (CENTER modal, pauses game) */
+        #settingsPanel {
+            /* Keep settings aligned to the game container (important when we rotate the container on mobile portrait). */
+            position: absolute;
+            inset: 0;
+            z-index: 360;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.28s ease, visibility 0.28s ease;
+        }
+
+        #settingsPanel.open {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+        }
+
+        .settingsBackdrop {
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(900px 600px at 40% 40%, rgba(0,255,255,0.10), rgba(0,0,0,0.0) 60%),
+                rgba(0,0,0,0.72);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            opacity: 0;
+            transition: opacity 0.28s ease;
+        }
+
+        #settingsPanel.open .settingsBackdrop {
+            opacity: 1;
+        }
+
+        .settingsSheet {
+            position: relative;
+            width: min(520px, calc(100vw - 24px));
+            max-height: calc(100vh - 180px);
+            padding: 0;
+            transform: translateY(18px) scale(0.97);
+            opacity: 0;
+            transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.2, 1), opacity 0.32s ease;
+        }
+
+        #settingsPanel.open .settingsSheet {
+            transform: translateY(0) scale(1);
+            opacity: 1;
+        }
+
+        /* Mobile tweaks for menu layout */
+        @media (max-width: 520px) {
+            .menuTitle { font-size: 42px; }
+            .menuButtons { grid-template-columns: 1fr; }
+        }
+
+        .overlay button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.8);
+        }
+
+        .overlay button:active {
+            transform: scale(0.95);
+        }
+
+        /* Pause Overlay */
+        #pauseOverlay {
+            background: rgba(0, 0, 0, 0.9);
+        }
+
+        #pauseOverlay h1 {
+            font-size: 36px;
+        }
+
+        /* Settings Modal */
+        #settingsModal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.9);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 300;
+            opacity: 0;
+            pointer-events: none;
+            visibility: hidden;
+            transition: opacity 0.3s;
+        }
+
+        #settingsModal.visible {
+            opacity: 1;
+            pointer-events: auto;
+            visibility: visible;
+        }
+
+        .settingsCard {
+            background: #1a1a3a;
+            border: 2px solid #ff00ff;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 0 30px rgba(255, 0, 255, 0.5);
+        }
+
+        .settingsHeader {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 0, 255, 0.3);
+            padding-bottom: 15px;
+        }
+
+        .settingsHeader h2 {
+            color: #fff;
+            font-size: 28px;
+            margin: 0;
+        }
+
+        .settingsClose {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 36px;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background 0.2s;
+        }
+
+        .settingsClose:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .settingsToggle {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+
+        .settingsToggle label {
+            font-size: 18px;
+        }
+
+        .toggleSwitch {
+            width: 60px;
+            height: 30px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .toggleSwitch.active {
+            background: #00ffff;
+        }
+
+        .toggleSwitch::after {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            background: #fff;
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: transform 0.3s;
+        }
+
+        .toggleSwitch.active::after {
+            transform: translateX(30px);
+        }
+
+        /* Note: Settings modal intentionally kept minimal (Music / FX / Haptics only). */
+
+        #settingsBtn {
+            position: absolute;
+            top: 45px;
+            right: 20px;
+            width: 50px;
+            height: 50px;
+            background: rgba(255, 255, 255, 0.2);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 8px;
+            cursor: pointer;
+            pointer-events: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            transition: all 0.2s;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .iconBtn svg {
+            width: 24px;
+            height: 24px;
+            fill: currentColor;
+            pointer-events: none; /* Ensure touches go to button, not SVG path */
+        }
+
+        .iconBtn {
+            transition: opacity 0.32s ease, transform 0.32s ease, background 0.2s, box-shadow 0.2s;
+        }
+
+        #settingsBtn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.1);
+        }
+
+        /* Mobile adjustments */
+        @media (pointer: coarse) {
+            .overlay {
+                padding:
+                    calc(env(safe-area-inset-top) + 64px)
+                    calc(env(safe-area-inset-right) + 18px)
+                    calc(env(safe-area-inset-bottom) + 18px)
+                    calc(env(safe-area-inset-left) + 18px);
+            }
+
+            #hud {
+                top: calc(env(safe-area-inset-top) + 120px);
+                left: 50%;
+                right: auto;
+                transform: translateX(-50%);
+            }
+
+            #pauseBtn {
+                top: calc(env(safe-area-inset-top) + 120px);
+                left: calc(env(safe-area-inset-left) + 20px);
+            }
+
+            #settingsBtn {
+                top: calc(env(safe-area-inset-top) + 120px);
+                right: calc(env(safe-area-inset-right) + 20px);
+            }
+
+            #distance {
+                font-size: 18px;
+            }
+
+            .overlay h1 {
+                font-size: 36px;
+            }
+
+            .overlay p {
+                font-size: 18px;
+            }
+
+            .settingsCard {
+                padding: 20px;
+                max-width: 95%;
+            }
+        }
+
+        /* Mobile landscape mode (including forced landscape): zoomed-out gameplay needs a smaller HUD */
+        #game-container.landscapeMode #hud {
+            font-size: 12px;
+            top: calc(env(safe-area-inset-top) + 120px) !important;
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        #game-container.landscapeMode #distance {
+            font-size: 6px !important;
+        }
+        
+        /* Extra small for mobile landscape specifically */
+        @media (pointer: coarse) {
+            #game-container.landscapeMode #distance {
+                font-size: 6px !important;
+            }
+        }
+        #game-container.landscapeMode #highScore {
+            display: none !important;
+        }
+
+        /* Natural landscape mode: Position pause and settings buttons on top right of game screen */
+        #game-container.landscapeMode #pauseBtn,
+        #game-container.landscapeMode #settingsBtn {
+            top: calc(env(safe-area-inset-top) + 60px) !important;
+            left: auto !important;
+            right: calc(env(safe-area-inset-right) + 20px) !important;
+        }
+
+        #game-container.landscapeMode #pauseBtn {
+            right: calc(env(safe-area-inset-right) + 80px) !important; /* Offset to not overlap settings */
+        }
+
+        /* Natural landscape mode: Constrain start screen buttons width */
+        #game-container.landscapeMode .startScene {
+            width: min(480px, calc(100% - 40px)) !important;
+        }
+
+        #game-container.landscapeMode .menuButtons {
+            grid-template-columns: auto auto !important;
+            justify-content: center !important;
+        }
+
+        #game-container.landscapeMode .menuBtn {
+            min-width: 120px !important;
+            max-width: 180px !important;
+            padding: 12px 20px !important;
+        }
+
+        /* =========================================================
+           FORCED LANDSCAPE MODE (portrait device, rotated 90° game)
+           Empirically confirmed coordinate mapping:
+           - top/bottom → visible TOP/BOTTOM
+           - left/right → visible LEFT/RIGHT
+           So CSS coords work normally within the rotated container.
+           ========================================================= */
+
+        /* Forced landscape: Position buttons at visible top-right */
+        /* Settings is further from edge (80px) to avoid iOS edge touch issues */
+        #game-container.forcedLandscape #pauseBtn,
+        #game-container.forcedLandscape #settingsBtn {
+            top: 60px !important;
+            bottom: auto !important;
+            left: auto !important;
+        }
+
+        #game-container.forcedLandscape #pauseBtn {
+            right: 20px !important;
+        }
+
+        #game-container.forcedLandscape #settingsBtn {
+            right: 80px !important; /* Further from edge to avoid iOS touch issues */
+        }
+
+        /* Forced landscape: HUD positioning - center of visible screen */
+        #game-container.forcedLandscape #hud {
+            font-size: 12px !important;
+            top: 60px !important;
+            bottom: auto !important;
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+        }
+
+        /* Forced landscape: Ensure overlays fill the rotated container properly */
+        #game-container.forcedLandscape .overlay {
+            position: absolute !important;
+            inset: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
+            z-index: 200 !important;
+        }
+
+        #game-container.forcedLandscape #pauseOverlay {
+            z-index: 250 !important;
+        }
+
+        #game-container.forcedLandscape #distance {
+            font-size: 14px !important;
+        }
+
+        #game-container.forcedLandscape #highScore {
+            display: none !important;
+        }
+
+        /* Forced landscape: Constrain start screen buttons width */
+        #game-container.forcedLandscape .startScene {
+            width: min(480px, calc(100% - 40px)) !important;
+        }
+
+        #game-container.forcedLandscape .menuButtons {
+            grid-template-columns: auto auto !important;
+            justify-content: center !important;
+        }
+
+        #game-container.forcedLandscape .menuBtn {
+            min-width: 120px !important;
+            max-width: 180px !important;
+            padding: 12px 20px !important;
+        }
+
+        /* Very short screens (landscape phones): keep menu compact so it doesn't get cut off */
+        @media (pointer: coarse) and (max-height: 520px) {
+            .menuPills { display: none; }
+            .menuFooter { display: none; }
+            .menuButtons { gap: 10px; margin-top: 10px; }
+            .menuBtn { padding: 12px 14px; font-size: 17px; }
+        }
+
+        /* =========================================================
+           PIXEL UI OVERRIDES (menus / game over / pause / settings)
+           These elements live OUTSIDE #ui, so they need their own
+           final override block to guarantee pixel font + styling.
+           ========================================================= */
+
+        #startOverlay,
+        #gameOverOverlay,
+        #pauseOverlay,
+        #settingsPanel,
+        #startOverlay * ,
+        #gameOverOverlay * ,
+        #pauseOverlay * ,
+        #settingsPanel * {
+            font-family: var(--ui-font) !important;
+            letter-spacing: 0.03em !important;
+            text-transform: uppercase !important;
+            -webkit-font-smoothing: none;
+            -moz-osx-font-smoothing: auto;
+        }
+
+        /* Titles */
+        #startOverlay .menuTitle,
+        #gameOverOverlay h1,
+        #pauseOverlay h1,
+        #settingsPanel h2 {
+            background: none !important;
+            -webkit-text-fill-color: currentColor !important;
+            color: var(--ui-fg) !important;
+            text-shadow: 3px 3px 0 rgba(0,0,0,0.80), 0 0 18px rgba(120,255,244,0.18) !important;
+            letter-spacing: 0.08em !important;
+            font-weight: 400 !important;
+        }
+
+        #startOverlay .menuKicker,
+        #startOverlay .menuSub,
+        #startOverlay .menuFooter,
+        #gameOverOverlay p,
+        #pauseOverlay p,
+        #settingsPanel label {
+            text-shadow: 2px 2px 0 rgba(0,0,0,0.65) !important;
+        }
+
+        #startOverlay .menuKicker { font-size: 10px !important; letter-spacing: 0.24em !important; }
+        #startOverlay .menuSub { font-size: 12px !important; line-height: 1.6 !important; }
+        #startOverlay .menuFooter { font-size: 10px !important; opacity: 0.82 !important; }
+
+        /* Pills -> pixel chips */
+        #startOverlay .pill {
+            border-radius: 0 !important;
+            border: 2px solid rgba(255,255,255,0.14) !important;
+            background: rgba(0,0,0,0.28) !important;
+            font-size: 10px !important;
+            padding: 8px 10px !important;
+        }
+
+        /* Pixel buttons across all overlays */
+        #startOverlay button,
+        #gameOverOverlay button,
+        #pauseOverlay button,
+        #settingsPanel button {
+            border-radius: 0 !important;
+            border: 3px solid var(--ui-border) !important;
+            background: var(--ui-bg) !important;
+            color: var(--ui-fg) !important;
+            font-weight: 400 !important;
+            font-size: 12px !important;
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 18px var(--ui-accent-soft) !important;
+        }
+
+        #startOverlay button:hover,
+        #gameOverOverlay button:hover,
+        #pauseOverlay button:hover,
+        #settingsPanel button:hover {
+            transform: translateY(-2px) !important;
+            box-shadow:
+                0 0 0 3px var(--ui-shadow) inset,
+                0 0 26px rgba(120,255,244,0.30) !important;
+        }
+
+        #startOverlay button:active,
+        #gameOverOverlay button:active,
+        #pauseOverlay button:active,
+        #settingsPanel button:active {
+            transform: translateY(1px) !important;
+        }
+
+        /* Primary menu button: pixel "highlight" */
+        #startOverlay .menuBtn.primary {
+            border-color: rgba(120, 255, 244, 0.95) !important;
+            background: rgba(120, 255, 244, 0.14) !important;
+        }
+
+        /* Kill glossy/glitter layers for pixel cleanliness */
+        #startOverlay .menuBtn::before,
+        #startOverlay .menuBtn::after {
+            display: none !important;
+            content: none !important;
+        }
+
+        /* Settings modal controls */
+        #settingsPanel .settingsSheet,
+        #settingsPanel .settingsCard {
+            border-radius: 0 !important;
+        }
+
+        #settingsPanel .settingsCard {
+            background: rgba(5,4,13,0.92) !important;
+            border: 3px solid rgba(210,255,240,0.34) !important;
+            box-shadow: 0 0 0 3px var(--ui-shadow) inset, 0 0 22px rgba(120,255,244,0.18) !important;
+        }
+
+        #settingsPanel .settingsHeader h2 { font-size: 16px !important; }
+
+        #settingsPanel .settingsClose {
+            border-radius: 0 !important;
+            width: 40px !important;
+            height: 34px !important;
+            font-size: 12px !important;
+            line-height: 1 !important;
+            border: 3px solid rgba(210,255,240,0.34) !important;
+            background: rgba(0,0,0,0.20) !important;
+        }
+
+        #settingsPanel .settingsToggle label { font-size: 12px !important; }
+
+        #settingsPanel .toggleSwitch {
+            border-radius: 0 !important;
+            border: 3px solid rgba(255,255,255,0.18) !important;
+            background: rgba(0,0,0,0.25) !important;
+        }
+        #settingsPanel .toggleSwitch.active {
+            background: rgba(120,255,244,0.22) !important;
+            border-color: rgba(120,255,244,0.70) !important;
+        }
+        #settingsPanel .toggleSwitch::after {
+            border-radius: 0 !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="canvas"></canvas>
+        
+        <div id="ui">
+            <div id="hud" class="uiHidden">
+                <div>
+                    <div id="distance">0m</div>
+                    <div id="highScore">Best: 0m</div>
+                </div>
+            </div>
+            <button id="pauseBtn" class="iconBtn uiHidden" aria-label="Pause">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M7 5h3v14H7V5zm7 0h3v14h-3V5z"></path>
+                </svg>
+            </button>
+            <button id="settingsBtn" class="iconBtn uiHidden" aria-label="Settings">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.61l-1.92-3.32a.5.5 0 0 0-.59-.22l-2.39.96c-.5-.38-1.04-.7-1.63-.94l-.36-2.54A.5.5 0 0 0 14.4 2h-4.8a.5.5 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.59.22L2.24 8.47a.5.5 0 0 0 .12.61l2.03 1.58c-.05.31-.08.63-.08.94s.03.63.08.94l-2.03 1.58a.5.5 0 0 0-.12.61l1.92 3.32c.12.22.37.3.59.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.04.24.24.41.48.41h4.8c.24 0 .44-.17.48-.41l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.5.5 0 0 0-.12-.61l-2.03-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"></path>
+                </svg>
+            </button>
+        </div>
+
+        <!-- Settings (hidden overlay) -->
+        <div id="settingsPanel" aria-hidden="true">
+            <div class="settingsBackdrop" id="settingsBackdrop"></div>
+            <div class="settingsSheet" role="dialog" aria-modal="true" aria-label="Settings">
+                <div class="settingsCard">
+                    <div class="settingsHeader">
+                        <h2>Settings</h2>
+                        <button class="settingsClose" id="settingsCloseBtn" aria-label="Close settings">X</button>
+                    </div>
+                    <div class="settingsContent">
+                        <div class="settingsToggle">
+                            <label>Music</label>
+                            <div class="toggleSwitch active" id="toggleMusic"></div>
+                        </div>
+                        <div class="settingsToggle">
+                            <label>Sound Effects</label>
+                            <div class="toggleSwitch active" id="toggleFx"></div>
+                        </div>
+                        <div class="settingsToggle">
+                            <label>Haptics</label>
+                            <div class="toggleSwitch active" id="toggleHaptics"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Menu / Start Screen -->
+        <div id="startOverlay" class="overlay">
+            <div class="startLines" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <div class="startScene overlay-content">
+                <h1 class="menuTitle">WAVE MODE</h1>
+                <div class="menuButtons">
+                    <button id="playBtn" class="menuBtn primary">Start Game</button>
+                    <button id="optionsBtn" class="menuBtn">Options</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameOverOverlay" class="overlay hidden">
+            <div class="overlay-content">
+                <h1>GAME OVER</h1>
+                <p id="finalDistance">Distance: 0m</p>
+                <p id="bestDistance" style="display: none;">Best: 0m</p>
+                <p id="newRecord" style="display: none; color: #00ffff; font-weight: bold;">NEW RECORD!</p>
+                <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                    <button id="restartBtn">RESTART</button>
+                    <button id="menuBtn">MENU</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pause Screen -->
+        <div id="pauseOverlay" class="overlay hidden">
+            <div class="overlay-content">
+                <h1>PAUSED</h1>
+                <p>Press SPACE or click to resume</p>
+                <button id="resumeBtn">RESUME</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

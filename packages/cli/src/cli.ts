@@ -6,14 +6,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { spawn } from "node:child_process";
 import { stdin, stdout } from "node:process";
-import {
-  buildGame,
-  collectAssets,
-  formatBytes,
-  readBundleHtml,
-  readThumbnail,
-  summarizeDist,
-} from "./lib/build.ts";
+import { formatBytes, summarizeDist } from "./lib/build.ts";
 import {
   clearStoredCredentials,
   getApiBaseUrl,
@@ -31,7 +24,6 @@ import {
   type StudioDraft,
 } from "./lib/api.ts";
 import {
-  getGameFolders,
   getGamePath,
   isGameSlug,
   listMainTemplates,
@@ -42,6 +34,7 @@ import {
   validateGameFolder,
   writePublishConfig,
 } from "./lib/game.ts";
+import { listUploadGames, printUploadHelp, runUploadCli as runUploadCliImpl, runUploadCommand } from "./upload-cli.ts";
 
 type OrientationOverride = boolean | undefined;
 
@@ -63,30 +56,13 @@ function printHelp(): void {
   console.log("  oasiz whoami                Show auth state");
   console.log("");
   console.log("Upload flags:");
-  console.log("  --draft                     Upload as draft only");
-  console.log("  --activate                  Upload and make live immediately");
+  console.log("  new                         Upload as a new game");
+  console.log("  --activate                  Activate uploaded draft if supported");
   console.log("  --skip-build                Skip build step and use dist/");
-  console.log("  --dry-run                   Build and preview payload only");
+  console.log("  --dry-run                   Build but do not upload");
+  console.log("  --inline                    Inline all assets into HTML");
+  console.log("  --withlog                   Unity only: inject loader log overlay");
   console.log("  horizontal | vertical       Override publish.json verticalOnly");
-}
-
-function printUploadHelp(): void {
-  console.log("Usage: oasiz upload <game> [flags]");
-  console.log("");
-  console.log("Flags:");
-  console.log("  --draft");
-  console.log("  --activate");
-  console.log("  --skip-build");
-  console.log("  --dry-run");
-  console.log("  horizontal");
-  console.log("  vertical");
-  console.log("");
-  console.log("Examples:");
-  console.log("  oasiz upload block-blast");
-  console.log("  oasiz upload block-blast --dry-run");
-  console.log("  oasiz upload block-blast --activate vertical");
-  console.log("");
-  console.log("Use `oasiz list` to see local game folders.");
 }
 
 function fail(message: string): never {
@@ -260,19 +236,7 @@ function printBuildSummary(gamePath: string): void {
 }
 
 async function commandList(): Promise<void> {
-  const folders = getGameFolders();
-  if (folders.length === 0) {
-    console.log("No local game folders found.");
-    return;
-  }
-
-  console.log("Local games:");
-  for (const folder of folders) {
-    const hasPublish = existsSync(join(getGamePath(folder), "publish.json"));
-    console.log("  " + (hasPublish ? "✓" : "○") + " " + folder);
-  }
-  console.log("");
-  console.log("✓ has publish.json, ○ uses defaults");
+  await listUploadGames();
 }
 
 async function commandCreate(argv: string[]): Promise<void> {
@@ -656,112 +620,7 @@ async function resolveGameTitle(gameArg: string): Promise<string> {
 }
 
 async function commandUpload(gameSlug: string, argv: string[]): Promise<void> {
-  const gamePath = validateGameFolder(gameSlug);
-  const parsed = parseArgs(argv);
-  const skipBuild = parsed.flagSet.has("--skip-build");
-  const dryRun = parsed.flagSet.has("--dry-run");
-  const forceDraft = parsed.flagSet.has("--draft");
-  const forceActivate = parsed.flagSet.has("--activate");
-  const orientation = parseOrientation(argv);
-
-  if (forceDraft && forceActivate) {
-    fail("Use either --draft or --activate, not both.");
-  }
-
-  const token = dryRun ? null : await requireAuthToken();
-  const publishConfig = await readPublishConfig(gamePath);
-  const gameTitle = publishConfig.title || slugToTitle(gameSlug);
-
-  let preflightGameFound = false;
-  let preflightDrafts: StudioDraft[] = [];
-  if (!dryRun && token) {
-    const preflight = await getUploadPreflight(gameTitle, token);
-    preflightGameFound = Boolean(preflight.game);
-    preflightDrafts = preflight.drafts || [];
-    const liveDraft = getLiveDraft(preflightDrafts);
-
-    if (preflightGameFound) {
-      console.log("");
-      console.log("\"" + gameTitle + "\" is on the platform - " + (liveDraft?.label || "an older version") + " is currently live.");
-      console.log("");
-      if (!forceDraft && !forceActivate) {
-        const shouldContinue = await askYesNo("Upload as a new draft? [Y/n] ", true);
-        if (!shouldContinue) {
-          console.log("Upload cancelled.");
-          return;
-        }
-      }
-    } else {
-      console.log("No existing canonical game found for " + gameTitle + ". This will create one.");
-    }
-  }
-
-  if (!skipBuild) {
-    console.log("Building " + gameSlug + "...");
-    await buildGame(gamePath);
-    console.log("Build complete.");
-  }
-
-  const bundleHtml = await readBundleHtml(gamePath);
-  const assets = await collectAssets(gamePath);
-  const thumbnailBase64 = await readThumbnail(gamePath);
-
-  const payload = {
-    title: gameTitle,
-    slug: gameSlug,
-    description: publishConfig.description,
-    category: publishConfig.category,
-    email: process.env.OASIZ_EMAIL,
-    gameId: publishConfig.gameId,
-    isMultiplayer: publishConfig.isMultiplayer,
-    maxPlayers: publishConfig.maxPlayers,
-    verticalOnly: orientation ?? publishConfig.verticalOnly,
-    thumbnailBase64,
-    bundleHtml,
-    assets,
-    activate: forceActivate,
-  };
-
-  if (dryRun) {
-    console.log("");
-    console.log("Dry run (no upload):");
-    console.log("  Title: " + payload.title);
-    console.log("  Slug: " + payload.slug);
-    console.log("  Category: " + payload.category);
-    console.log("  Game ID: " + (payload.gameId || "(new game)"));
-    console.log("  HTML: " + formatBytes(bundleHtml.length));
-    console.log("  Assets: " + Object.keys(assets).length + " files");
-    printBuildSummary(gamePath);
-    return;
-  }
-
-  const result = await postUploadGame(payload, token!);
-  console.log("");
-  console.log("Uploaded as " + result.label + (result.activated ? " (live)." : " (draft)."));
-
-  if (!publishConfig.gameId && result.gameId) {
-    await writePublishConfig(gamePath, {
-      ...publishConfig,
-      gameId: result.gameId,
-    });
-    console.log("Saved gameId to publish.json.");
-  }
-
-  const shouldAskActivate = !result.activated && !forceDraft && !forceActivate;
-  if (shouldAskActivate) {
-    const previousLive = getLiveDraft(preflightDrafts)?.label || "current live";
-    console.log("");
-    const activateNow = await askYesNo(
-      "Make " + result.label + " live now? This will replace " + previousLive + " immediately. [y/N] ",
-      false,
-    );
-    if (activateNow) {
-      await postActivateDraft(result.draftId, token!);
-      console.log("Activated " + result.label + ".");
-    } else {
-      console.log("Kept as draft.");
-    }
-  }
+  await runUploadCommand(gameSlug, argv);
 }
 
 async function commandVersions(gameArg: string): Promise<void> {
@@ -1115,21 +974,7 @@ async function commandWhoAmI(): Promise<void> {
 }
 
 export async function runUploadCli(args: string[] = []): Promise<void> {
-  if (args.includes("--list") || args.includes("-l")) {
-    await commandList();
-    return;
-  }
-
-  if (args.includes("--help") || args.includes("-h") || args.length === 0) {
-    printUploadHelp();
-    return;
-  }
-
-  const gameSlug = args[0];
-  if (!gameSlug || gameSlug.startsWith("-")) {
-    fail("Usage: oasiz upload <game>");
-  }
-  await commandUpload(gameSlug, args.slice(1));
+  await runUploadCliImpl(args);
 }
 
 export async function runCli(argv: string[] = process.argv.slice(2)): Promise<void> {
@@ -1156,15 +1001,7 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         await commandCreate(argv.slice(1));
         return;
       case "upload":
-        if (!value || value === "--help" || value === "-h") {
-          printUploadHelp();
-          return;
-        }
-        if (value === "--list" || value === "-l") {
-          await commandList();
-          return;
-        }
-        await commandUpload(value, rest);
+        await runUploadCliImpl(argv.slice(1));
         return;
       case "versions":
         if (!value) fail("Usage: oasiz versions <game>");

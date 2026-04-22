@@ -118,12 +118,31 @@ var OasizBridge = {
   // ---------------------------------------------------------------------------
 
   OasizGetSafeAreaTop: function () {
-    var top = 0;
+    var pct = 0;
+    if (typeof window.getSafeAreaTopPercent === "function") {
+      try {
+        var p = window.getSafeAreaTopPercent();
+        if (typeof p === "number" && isFinite(p)) {
+          pct = Math.min(100, Math.max(0, p));
+        }
+      } catch (e) {
+        console.error("[OasizSDK] getSafeAreaTopPercent failed:", e);
+      }
+      return pct;
+    }
+    if (
+      typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ !== "undefined" &&
+      typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ === "number" &&
+      isFinite(window.__OASIZ_SAFE_AREA_TOP_PERCENT__)
+    ) {
+      return Math.min(100, Math.max(0, window.__OASIZ_SAFE_AREA_TOP_PERCENT__));
+    }
+    var topPx = 0;
     if (typeof window.getSafeAreaTop === "function") {
       try {
         var v = window.getSafeAreaTop();
         if (typeof v === "number" && isFinite(v)) {
-          top = Math.max(0, v);
+          topPx = Math.max(0, v);
         }
       } catch (e) {
         console.error("[OasizSDK] getSafeAreaTop failed:", e);
@@ -133,11 +152,16 @@ var OasizBridge = {
       typeof window.__OASIZ_SAFE_AREA_TOP__ === "number" &&
       isFinite(window.__OASIZ_SAFE_AREA_TOP__)
     ) {
-      top = Math.max(0, window.__OASIZ_SAFE_AREA_TOP__);
+      topPx = Math.max(0, window.__OASIZ_SAFE_AREA_TOP__);
     } else {
       console.warn("[OasizSDK] getSafeAreaTop bridge is unavailable.");
+      return 0;
     }
-    return top;
+    var h = window.innerHeight;
+    if (typeof h !== "number" || !isFinite(h) || h <= 0) {
+      return 0;
+    }
+    return Math.min(100, Math.max(0, (topPx / h) * 100));
   },
 
   OasizSetLeaderboardVisible: function (visible) {

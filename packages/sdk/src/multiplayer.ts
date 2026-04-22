@@ -6,6 +6,7 @@ type MultiplayerBridgeWindow = Window & {
   openInviteModal?: () => void;
   __GAME_ID__?: string;
   __ROOM_CODE__?: string;
+  __PLAYER_ID__?: string;
   __PLAYER_NAME__?: string;
   __PLAYER_AVATAR__?: string;
 };
@@ -76,6 +77,21 @@ export function getGameId(): string | undefined {
 export function getRoomCode(): string | undefined {
   const bridge = getBridgeWindow();
   return bridge?.__ROOM_CODE__;
+}
+
+/**
+ * Stable, unique, opaque identifier for the authenticated player, injected
+ * by the platform. Safe to use as a primary key for save slots, matchmaking,
+ * per-player analytics, or anywhere you need a reliable per-user key —
+ * unlike `getPlayerName()` (mutable, not unique).
+ *
+ * Mirrors the backend's `playerId` field returned by `GET /api/sdk/me`
+ * (= the Better Auth `user.id`). Returns `undefined` when the platform
+ * has not injected an identity (e.g. unauthenticated preview).
+ */
+export function getPlayerId(): string | undefined {
+  const bridge = getBridgeWindow();
+  return bridge?.__PLAYER_ID__;
 }
 
 export function getPlayerName(): string | undefined {

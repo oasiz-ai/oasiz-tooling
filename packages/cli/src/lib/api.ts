@@ -26,7 +26,7 @@ export interface UploadGamePayload {
   slug: string;
   description: string;
   category: string;
-  email?: string;
+  email: string;
   gameId?: string;
   isMultiplayer?: boolean;
   maxPlayers?: number;
@@ -34,15 +34,14 @@ export interface UploadGamePayload {
   thumbnailBase64?: string;
   bundleHtml: string;
   assets?: Record<string, string>;
-  activate?: boolean;
 }
 
 export interface UploadGameResponse {
-  ok: boolean;
-  gameId: string;
-  draftId: string;
-  label: string;
-  activated: boolean;
+  ok?: boolean;
+  gameId?: string;
+  draftId?: string;
+  label?: string;
+  activated?: boolean;
 }
 
 export interface ActivateDraftResponse {
@@ -70,7 +69,16 @@ interface ApiOptions {
   body?: unknown;
 }
 
+function summarizeErrorBody(raw: string): string {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (!text) return "(empty response body)";
+  const limit = 240;
+  if (text.length <= limit) return text;
+  return text.slice(0, limit) + "...";
+}
+
 async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T> {
+  const requestUrl = getApiUrl(path);
   const headers: Record<string, string> = {};
   if (options.token) {
     headers.Authorization = "Bearer " + options.token;
@@ -79,15 +87,28 @@ async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T>
     headers["Content-Type"] = "application/json";
   }
 
-  const response = await fetch(getApiUrl(path), {
-    method: options.method || "GET",
-    headers,
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(requestUrl, {
+      method: options.method || "GET",
+      headers,
+      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    const details = error instanceof Error ? error.message : String(error);
+    throw new Error("Unable to connect to API.\nTarget URL: " + requestUrl + "\nCause: " + details);
+  }
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error("Request failed (" + response.status + "): " + text);
+    throw new Error(
+      "Request failed (" +
+        response.status +
+        ") for " +
+        requestUrl +
+        ". Response preview: " +
+        summarizeErrorBody(text),
+    );
   }
 
   return (await response.json()) as T;

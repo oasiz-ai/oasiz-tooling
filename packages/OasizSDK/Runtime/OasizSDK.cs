@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Scripting;
 
@@ -150,6 +151,59 @@ namespace Oasiz
     }
     [Preserve]
     private void _OnLeaveGameFromJS() => OnLeaveGame?.Invoke();
+
+    // -------------------------------------------------------------------------
+    // Async response plumbing — used by GetPlayerCharacter, EditScore, SetScore
+    // -------------------------------------------------------------------------
+    //
+    // Unity WebGL P/Invoke functions cannot return JS Promises. Instead, the
+    // C# side allocates a request id, the .jslib bridge resolves the host
+    // Promise, and then SendMessages the JSON payload back to this GameObject.
+    // We resolve the matching TaskCompletionSource here.
+    //
+    // Wire format (single string arg, since SendMessage only takes one):
+    //   "<requestId>|<jsonPayload>"
+    // where jsonPayload is "" when the host returned null.
+
+    private static int _nextRequestId = 0;
+    private static readonly Dictionary<string, TaskCompletionSource<string>> _pendingAsyncRequests
+      = new Dictionary<string, TaskCompletionSource<string>>();
+
+    private static (string requestId, Task<string> task) RegisterAsyncRequest()
+    {
+      var id = System.Threading.Interlocked.Increment(ref _nextRequestId).ToString();
+      var tcs = new TaskCompletionSource<string>();
+      _pendingAsyncRequests[id] = tcs;
+      return (id, tcs.Task);
+    }
+
+    [Preserve]
+    private void _OnAsyncResponseFromJS(string payload)
+    {
+      if (string.IsNullOrEmpty(payload))
+      {
+        return;
+      }
+
+      int sep = payload.IndexOf('|');
+      if (sep < 0)
+      {
+        Debug.LogWarning("[OasizSDK] _OnAsyncResponseFromJS received malformed payload (no separator).");
+        return;
+      }
+
+      var id = payload.Substring(0, sep);
+      var json = payload.Substring(sep + 1);
+
+      if (!_pendingAsyncRequests.TryGetValue(id, out var tcs))
+      {
+        Debug.LogWarning("[OasizSDK] _OnAsyncResponseFromJS got response for unknown id: " + id);
+        return;
+      }
+
+      _pendingAsyncRequests.Remove(id);
+      tcs.TrySetResult(json);
+    }
     // ReSharper restore UnusedMember.Local
 
     // -------------------------------------------------------------------------
@@ -172,6 +226,60 @@ namespace Oasiz
       OasizSubmitScore(score);
 #else
       Debug.Log($"[OasizSDK] SubmitScore({score}) — bridge unavailable in Editor.");
+#endif
+    }
+
+    /// <summary>
+    /// Add (or subtract) <paramref name="delta"/> from the player's current
+    /// leaderboard score for this game. Unlike <see cref="SubmitScore"/>
+    /// (high-water mark), this overwrites the row, so use it for game models
+    /// where the leaderboard tracks a balance/accumulator/persistent state
+    /// instead of a single best-run value.
+    ///
+    /// Resolves to null when the host bridge is unavailable (e.g. Editor) or
+    /// when the backend rejected the request. Resolves with the resulting
+    /// row data on success.
+    /// </summary>
+    public static Task<ScoreEditResult> EditScore(int delta)
+    {
+      if (delta == 0)
+      {
+        return Task.FromResult<ScoreEditResult>(null);
+      }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+      var (id, task) = RegisterAsyncRequest();
+      OasizEditScore(id, "{\"delta\":" + delta + "}");
+      return task.ContinueWith(t => DeserializeScoreEditResult(t.Result),
+        TaskContinuationOptions.ExecuteSynchronously);
+#else
+      Debug.Log($"[OasizSDK] EditScore({delta}) — bridge unavailable in Editor.");
+      return Task.FromResult<ScoreEditResult>(null);
+#endif
+    }
+
+    /// <summary>
+    /// Force the player's score for this game to an absolute value (clamped
+    /// to >= 0 server-side). Same overwrite semantics as <see cref="EditScore"/>.
+    /// Use when the game has computed the authoritative score locally and
+    /// wants to sync it back to the leaderboard.
+    /// </summary>
+    public static Task<ScoreEditResult> SetScore(int score)
+    {
+      if (score < 0)
+      {
+        Debug.LogWarning("[OasizSDK] SetScore called with negative value. Clamping to 0.");
+        score = 0;
+      }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+      var (id, task) = RegisterAsyncRequest();
+      OasizEditScore(id, "{\"score\":" + score + "}");
+      return task.ContinueWith(t => DeserializeScoreEditResult(t.Result),
+        TaskContinuationOptions.ExecuteSynchronously);
+#else
+      Debug.Log($"[OasizSDK] SetScore({score}) — bridge unavailable in Editor.");
+      return Task.FromResult<ScoreEditResult>(null);
 #endif
     }
 
@@ -470,6 +578,47 @@ namespace Oasiz
       }
     }
 
+    /// <summary>
+    /// Stable, unique, opaque player identifier injected by the platform.
+    /// Safe to use as a primary key for save slots, matchmaking, per-player
+    /// analytics, or anywhere you need a reliable per-user key — unlike
+    /// <see cref="PlayerName"/> (mutable, not unique). Mirrors the backend's
+    /// <c>playerId</c> field returned by <c>GET /api/sdk/me</c>. Returns null
+    /// when the platform has not injected an identity.
+    /// </summary>
+    public static string PlayerId
+    {
+      get
+      {
+#if UNITY_WEBGL && !UNITY_EDITOR
+        string val = OasizGetPlayerId();
+        return string.IsNullOrEmpty(val) ? null : val;
+#else
+        return null;
+#endif
+      }
+    }
+
+    /// <summary>
+    /// Fetch the authenticated player's character, including a TexturePacker /
+    /// Phaser-style texture atlas describing the baked sprite image. Returns
+    /// null when the user has no character composition or when the bridge is
+    /// unavailable. The host transparently caches and proxies to
+    /// <c>GET /api/sdk/me/character</c>, so calling multiple times is cheap.
+    /// </summary>
+    public static Task<PlayerCharacter> GetPlayerCharacter()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+      var (id, task) = RegisterAsyncRequest();
+      OasizGetPlayerCharacter(id);
+      return task.ContinueWith(t => DeserializePlayerCharacter(t.Result),
+        TaskContinuationOptions.ExecuteSynchronously);
+#else
+      Debug.Log("[OasizSDK] GetPlayerCharacter() — bridge unavailable in Editor.");
+      return Task.FromResult<PlayerCharacter>(null);
+#endif
+    }
+
     /// <summary>Player display name injected by the platform. Null when not set.</summary>
     public static string PlayerName
     {
@@ -695,6 +844,40 @@ namespace Oasiz
       return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
     }
 
+    private static PlayerCharacter DeserializePlayerCharacter(string json)
+    {
+      if (string.IsNullOrEmpty(json))
+      {
+        return null;
+      }
+      try
+      {
+        return JsonUtility.FromJson<PlayerCharacter>(json);
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[OasizSDK] Failed to deserialize PlayerCharacter: " + e.Message);
+        return null;
+      }
+    }
+
+    private static ScoreEditResult DeserializeScoreEditResult(string json)
+    {
+      if (string.IsNullOrEmpty(json))
+      {
+        return null;
+      }
+      try
+      {
+        return JsonUtility.FromJson<ScoreEditResult>(json);
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[OasizSDK] Failed to deserialize ScoreEditResult: " + e.Message);
+        return null;
+      }
+    }
+
     private static Dictionary<string, object> ParseJsonObject(string json)
     {
       // Minimal JSON object parser — handles flat key/value pairs.
@@ -749,8 +932,11 @@ namespace Oasiz
     [DllImport("__Internal")] private static extern void OasizShareRequest(string requestJson);
     [DllImport("__Internal")] private static extern string OasizGetGameId();
     [DllImport("__Internal")] private static extern string OasizGetRoomCode();
+    [DllImport("__Internal")] private static extern string OasizGetPlayerId();
     [DllImport("__Internal")] private static extern string OasizGetPlayerName();
     [DllImport("__Internal")] private static extern string OasizGetPlayerAvatar();
+    [DllImport("__Internal")] private static extern void OasizGetPlayerCharacter(string requestId);
+    [DllImport("__Internal")] private static extern void OasizEditScore(string requestId, string payloadJson);
     [DllImport("__Internal")] private static extern void OasizRegisterEventListeners(string gameObjectName);
 #endif
   }

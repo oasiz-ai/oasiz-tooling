@@ -66,6 +66,118 @@ namespace Oasiz
     }
   }
 
+  // ===========================================================================
+  // Texture atlas / player character (mirrors GET /api/sdk/me/character)
+  // ===========================================================================
+
+  /// <summary>
+  /// One frame in a texture atlas. Coordinates are in pixels relative to the
+  /// top-left of the atlas image. Convert to Unity's bottom-left origin when
+  /// constructing a <c>UnityEngine.Sprite</c> with
+  /// <c>Sprite.Create(tex, new Rect(x, imageHeight - y - height, width, height), ...)</c>.
+  /// </summary>
+  [Serializable]
+  public sealed class TextureAtlasFrame
+  {
+    public string name;
+    public int x;
+    public int y;
+    public int width;
+    public int height;
+  }
+
+  /// <summary>
+  /// Per-direction frame indexes inside an animation. <c>left</c> is either an
+  /// integer string (the frame index) or the literal string <c>"mirror"</c>,
+  /// indicating the renderer should mirror the right-facing frame. Kept as a
+  /// string so <c>JsonUtility</c> can deserialize it without custom converters.
+  /// </summary>
+  [Serializable]
+  public sealed class FacingFrameMap
+  {
+    public int front;
+    public int back;
+    public int right;
+    /// <summary>Either an integer index as a string (e.g. <c>"3"</c>) or <c>"mirror"</c>.</summary>
+    public string left;
+  }
+
+  /// <summary>
+  /// One named animation in a texture atlas. <see cref="frames"/> is the
+  /// playback-ordered list of frame names; resolve each name against the
+  /// atlas's <see cref="TextureAtlas.frames"/> array to get coordinates.
+  /// </summary>
+  [Serializable]
+  public sealed class TextureAtlasAnimation
+  {
+    public string animationId;
+    public string role;
+    public string group;
+    public string direction;
+    public int frameRate;
+    public string[] frames;
+    public FacingFrameMap facingFrameMap;
+  }
+
+  /// <summary>
+  /// TexturePacker / Phaser-style texture atlas describing the player's
+  /// baked sprite image. Use <see cref="imageUrl"/> as the source for a
+  /// <c>UnityWebRequestTexture</c>; iterate <see cref="frames"/> to slice
+  /// <c>Sprite</c>s; iterate <see cref="animations"/> to build clips.
+  /// </summary>
+  [Serializable]
+  public sealed class TextureAtlas
+  {
+    public string imageUrl;
+    public int imageWidth;
+    public int imageHeight;
+    public TextureAtlasFrame[] frames;
+    public TextureAtlasAnimation[] animations;
+  }
+
+  /// <summary>
+  /// The authenticated player's character (returned by
+  /// <see cref="OasizSDK.GetPlayerCharacter"/>). <see cref="textureAtlas"/>
+  /// is the runtime atlas suitable for in-game rendering;
+  /// <see cref="editorTextureAtlas"/> is the higher-detail version intended
+  /// for character previews / customizer UI and may be null.
+  /// </summary>
+  [Serializable]
+  public sealed class PlayerCharacter
+  {
+    public string characterName;
+    public string baseCharacterId;
+    public string compositionCode;
+    public TextureAtlas textureAtlas;
+    public TextureAtlas editorTextureAtlas;
+  }
+
+  // ===========================================================================
+  // Score edit (mirrors POST /api/sdk/games/:id/score/edit)
+  // ===========================================================================
+
+  /// <summary>
+  /// Result of an <see cref="OasizSDK.EditScore"/> or
+  /// <see cref="OasizSDK.SetScore"/> call. The Task itself resolves to
+  /// <c>null</c> when the host bridge is unavailable or the backend
+  /// returned an error — callers don't need an `ok` flag.
+  /// </summary>
+  [Serializable]
+  public sealed class ScoreEditResult
+  {
+    public string playerId;
+    public int previousScore;
+    public int newScore;
+    public int previousWeeklyScore;
+    public int newWeeklyScore;
+    /// <summary>
+    /// Game's configured normalized score (0..N) for <see cref="newScore"/>.
+    /// Will be 0 when the game has no score config; check
+    /// <c>normalizedScore != 0</c> if you only want configured games.
+    /// </summary>
+    public int normalizedScore;
+  }
+
   /// <summary>
   /// Configuration for the in-game log overlay.
   /// </summary>
