@@ -10,6 +10,28 @@
   "use strict";
 
 var OasizBridge = {
+  $oasizUnityBridgeState: {
+    gameObjectName: null,
+  },
+
+  $oasizSendAsyncResponse__deps: ["$oasizUnityBridgeState"],
+  $oasizSendAsyncResponse: function (requestId, result) {
+    if (!oasizUnityBridgeState.gameObjectName) {
+      console.warn("[OasizSDK] async response bridge is unavailable; OasizSDK was not initialized.");
+      return;
+    }
+
+    var json = "";
+    if (result != null) {
+      try {
+        json = JSON.stringify(result);
+      } catch (e) {
+        console.error("[OasizSDK] async response failed to serialize:", e);
+      }
+    }
+
+    SendMessage(oasizUnityBridgeState.gameObjectName, "_OnAsyncResponseFromJS", requestId + "|" + json);
+  },
 
   // ---------------------------------------------------------------------------
   // Score
@@ -256,6 +278,14 @@ var OasizBridge = {
     return buffer;
   },
 
+  OasizGetPlayerId: function () {
+    var val = (window.__PLAYER_ID__ != null ? String(window.__PLAYER_ID__) : "");
+    var bufferSize = lengthBytesUTF8(val) + 1;
+    var buffer = _malloc(bufferSize);
+    stringToUTF8(val, buffer, bufferSize);
+    return buffer;
+  },
+
   OasizGetPlayerName: function () {
     var val = (window.__PLAYER_NAME__ != null ? String(window.__PLAYER_NAME__) : "");
     var bufferSize = lengthBytesUTF8(val) + 1;
@@ -272,6 +302,54 @@ var OasizBridge = {
     return buffer;
   },
 
+  OasizGetPlayerCharacter__deps: ["$oasizSendAsyncResponse"],
+  OasizGetPlayerCharacter: function (requestIdPtr) {
+    var requestId = UTF8ToString(requestIdPtr);
+    if (typeof window.__oasizGetPlayerCharacter !== "function") {
+      console.warn("[OasizSDK] __oasizGetPlayerCharacter bridge is unavailable.");
+      oasizSendAsyncResponse(requestId, null);
+      return;
+    }
+
+    Promise.resolve(window.__oasizGetPlayerCharacter())
+      .then(function (result) {
+        oasizSendAsyncResponse(requestId, result);
+      })
+      .catch(function (err) {
+        console.error("[OasizSDK] getPlayerCharacter request failed:", err);
+        oasizSendAsyncResponse(requestId, null);
+      });
+  },
+
+  OasizEditScore__deps: ["$oasizSendAsyncResponse"],
+  OasizEditScore: function (requestIdPtr, payloadJsonPtr) {
+    var requestId = UTF8ToString(requestIdPtr);
+    var payloadJson = UTF8ToString(payloadJsonPtr);
+    var payload;
+    try {
+      payload = JSON.parse(payloadJson);
+    } catch (e) {
+      console.error("[OasizSDK] editScore failed to parse payload JSON:", e);
+      oasizSendAsyncResponse(requestId, null);
+      return;
+    }
+
+    if (typeof window.__oasizEditScore !== "function") {
+      console.warn("[OasizSDK] __oasizEditScore bridge is unavailable.");
+      oasizSendAsyncResponse(requestId, null);
+      return;
+    }
+
+    Promise.resolve(window.__oasizEditScore(payload))
+      .then(function (result) {
+        oasizSendAsyncResponse(requestId, result);
+      })
+      .catch(function (err) {
+        console.error("[OasizSDK] editScore request failed:", err);
+        oasizSendAsyncResponse(requestId, null);
+      });
+  },
+
   // ---------------------------------------------------------------------------
   // Lifecycle & Navigation Event Listeners
   // ---------------------------------------------------------------------------
@@ -279,8 +357,10 @@ var OasizBridge = {
   // registers listeners for all four events and routes them back into Unity via
   // SendMessage on the OasizSDK GameObject.
 
+  OasizRegisterEventListeners__deps: ["$oasizUnityBridgeState"],
   OasizRegisterEventListeners: function (gameObjectNamePtr) {
     var gameObjectName = UTF8ToString(gameObjectNamePtr);
+    oasizUnityBridgeState.gameObjectName = gameObjectName;
 
     window.addEventListener("oasiz:pause", function () {
       SendMessage(gameObjectName, "_OnPauseFromJS");
