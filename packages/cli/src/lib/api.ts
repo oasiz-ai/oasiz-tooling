@@ -21,29 +21,6 @@ export interface UploadPreflightResponse {
   drafts: StudioDraft[];
 }
 
-export interface UploadGamePayload {
-  title: string;
-  slug: string;
-  description: string;
-  category: string;
-  email: string;
-  gameId?: string;
-  isMultiplayer?: boolean;
-  maxPlayers?: number;
-  verticalOnly?: boolean;
-  thumbnailBase64?: string;
-  bundleHtml: string;
-  assets?: Record<string, string>;
-}
-
-export interface UploadGameResponse {
-  ok?: boolean;
-  gameId?: string;
-  draftId?: string;
-  label?: string;
-  activated?: boolean;
-}
-
 export interface ActivateDraftResponse {
   ok: boolean;
   label?: string;
@@ -117,14 +94,6 @@ async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T>
 export async function getUploadPreflight(title: string, token: string): Promise<UploadPreflightResponse> {
   const query = new URLSearchParams({ title }).toString();
   return apiRequest<UploadPreflightResponse>("/api/upload/preflight?" + query, { token });
-}
-
-export async function postUploadGame(payload: UploadGamePayload, token: string): Promise<UploadGameResponse> {
-  return apiRequest<UploadGameResponse>("/api/upload/game", {
-    method: "POST",
-    token,
-    body: payload,
-  });
 }
 
 export async function postActivateDraft(draftId: string, token: string): Promise<ActivateDraftResponse> {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import { getApiUrl, readStoredCredentials, requireAuthToken } from "./lib/auth.ts";
 import { type PublishConfig, writePublishConfig } from "./lib/game.ts";
@@ -8,7 +8,15 @@ import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
 const MAX_UPLOAD_ASSET_SIZE_MB = 100;
 const MAX_UPLOAD_ASSET_SIZE_BYTES = MAX_UPLOAD_ASSET_SIZE_MB * 1024 * 1024;
+const MAX_RETRIES = 3;
+const UPLOAD_CONCURRENCY = 6;
 const UNITY_DIR = "Unity";
+
+interface AssetEntry {
+  path: string;
+  buffer: Buffer;
+  contentType: string;
+}
 
 interface UploadPayload {
   title: string;
@@ -22,7 +30,7 @@ interface UploadPayload {
   verticalOnly?: boolean;
   thumbnailBase64?: string;
   bundleHtml: string;
-  assets?: Record<string, string>;
+  assets?: AssetEntry[];
 }
 
 function loadEnvSync(): void {
@@ -440,24 +448,514 @@ async function inlineAssets(gamePath: string, html: string): Promise<string> {
 function getUnityPrebootLoggerBlock(): string {
   return `var prebootLogger = (() => {
         if (window.__prebootLogger) return window.__prebootLogger;
+
+        var STORAGE_KEY = '__unity_preboot_logs';
+        var LOGGER_MODE = "unity";
+        var ALWAYS_EXPANDED = false;
+        var AUTO_EXPAND_ON_ERROR = true;
+        var SESSION_ID = String(Date.now());
+        var TRACK_NETWORK_REQUESTS = LOGGER_MODE !== "html";
+        var PATCH_CANVAS_CONTEXT = LOGGER_MODE !== "html";
+        var OBSERVE_CANVASES = LOGGER_MODE !== "html";
+        var INTERCEPT_LOGGER_INTERACTIONS = LOGGER_MODE !== "html";
+
         var entries = [];
-        function push(level, message) {
-          var row = "[" + level.toUpperCase() + "] " + message;
-          entries.push(row);
-          try { console[level === "error" ? "error" : "log"](row); } catch (_e) {}
+        var maxEntries = 1200;
+        var expanded = false;
+        var errorCount = 0;
+        var consolePatched = false;
+        var originalConsole = {};
+        var pendingFetches = {};
+        var saveTimer = null;
+
+        var prevSessionEntries = [];
+        try {
+          var storedRaw = localStorage.getItem(STORAGE_KEY);
+          if (storedRaw) {
+            var storedData = JSON.parse(storedRaw);
+            if (storedData.sessionId !== SESSION_ID && Date.now() - storedData.ts < 600000) {
+              prevSessionEntries = storedData.entries || [];
+            }
+          }
+        } catch (_storageError) {}
+
+        var root = document.createElement("div");
+        root.id = "preboot-log-overlay";
+        root.style.cssText = [
+          "position:fixed",
+          "bottom:12px",
+          "right:12px",
+          "z-index:2147483647",
+          "width:min(560px,calc(100vw - 24px))",
+          "max-height:min(46vh,420px)",
+          "display:flex",
+          "flex-direction:column",
+          "background:rgba(9,14,20,0.95)",
+          "border:1px solid #00A1E4",
+          "border-radius:14px",
+          "box-shadow:0 10px 30px rgba(0,0,0,0.4)",
+          "overflow:hidden",
+          "font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
+          "color:#ecf7ff",
+        ].join(";");
+
+        var launcher = document.createElement("button");
+        launcher.type = "button";
+        launcher.id = "preboot-log-launcher";
+        launcher.textContent = "Logs";
+        launcher.style.cssText = [
+          "position:fixed",
+          "top:12px",
+          "right:12px",
+          "z-index:2147483647",
+          "appearance:none",
+          "border:1px solid rgba(0,161,228,0.6)",
+          "background:rgba(9,14,20,0.92)",
+          "color:#ecf7ff",
+          "border-radius:999px",
+          "padding:7px 12px",
+          "font:11px/1.2 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
+          "cursor:pointer",
+          "touch-action:manipulation",
+        ].join(";");
+
+        var header = document.createElement("div");
+        header.style.cssText = [
+          "display:flex",
+          "align-items:center",
+          "justify-content:space-between",
+          "gap:8px",
+          "padding:8px 10px",
+          "border-bottom:1px solid rgba(0,161,228,0.35)",
+          "background:rgba(0,161,228,0.10)",
+        ].join(";");
+
+        var title = document.createElement("div");
+        title.textContent = "Unity Logs";
+        title.style.cssText = "font-weight:700;white-space:nowrap;";
+
+        var countBadge = document.createElement("div");
+        countBadge.style.cssText = [
+          "border:1px solid rgba(0,161,228,0.45)",
+          "border-radius:999px",
+          "padding:2px 8px",
+          "font-size:11px",
+          "line-height:1.2",
+          "color:#9fdfff",
+          "background:rgba(0,161,228,0.08)",
+        ].join(";");
+
+        var actions = document.createElement("div");
+        actions.style.cssText = "display:flex;gap:6px;align-items:center;";
+
+        function makeButton(label, onClick) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = label;
+          button.style.cssText = [
+            "appearance:none",
+            "border:1px solid rgba(0,161,228,0.6)",
+            "background:rgba(0,161,228,0.08)",
+            "color:#ecf7ff",
+            "border-radius:999px",
+            "padding:4px 10px",
+            "font-size:11px",
+            "cursor:pointer",
+            "touch-action:manipulation",
+          ].join(";");
+          button.addEventListener("click", function (event) {
+            event.preventDefault();
+            event.stopPropagation();
+            onClick();
+          });
+          return button;
         }
-        window.addEventListener("error", function (event) {
-          push("error", event.message || "Unknown window error");
-        }, true);
-        window.addEventListener("unhandledrejection", function (event) {
-          push("error", "Unhandled promise rejection: " + String(event.reason));
+
+        function isLoggerTarget(target) {
+          return !!(target && typeof Node !== "undefined" && target instanceof Node && root.contains(target));
+        }
+
+        function swallowLoggerInteraction(event) {
+          if (!isLoggerTarget(event.target)) return;
+          if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+          if (typeof event.stopPropagation === "function") event.stopPropagation();
+        }
+
+        if (INTERCEPT_LOGGER_INTERACTIONS) {
+          ["pointerdown", "touchstart", "mousedown"].forEach(function (eventName) {
+            window.addEventListener(eventName, swallowLoggerInteraction, true);
+          });
+        }
+
+        var prevSection = document.createElement("div");
+        prevSection.style.cssText = [
+          "display:none",
+          "flex-direction:column",
+          "border-bottom:1px solid rgba(255,196,94,0.3)",
+          "background:rgba(255,196,94,0.04)",
+          "max-height:min(18vh,160px)",
+          "overflow:auto",
+          "flex-shrink:0",
+        ].join(";");
+
+        var prevSectionLabel = document.createElement("div");
+        prevSectionLabel.style.cssText = [
+          "padding:4px 12px",
+          "font-size:11px",
+          "color:rgba(255,196,94,0.85)",
+          "font-weight:600",
+          "position:sticky",
+          "top:0",
+          "background:rgba(9,14,20,0.97)",
+          "flex-shrink:0",
+        ].join(";");
+        prevSection.appendChild(prevSectionLabel);
+
+        var body = document.createElement("div");
+        body.style.cssText = "display:flex;flex-direction:column;overflow:auto;min-height:56px;padding:6px 0;";
+
+        function formatCount(n) {
+          if (n >= 1000) return (Math.floor(n / 100) / 10).toFixed(1) + "k";
+          return String(n);
+        }
+
+        function updateBadge() {
+          var text = formatCount(entries.length) + " logs";
+          if (errorCount > 0) text += " / " + errorCount + " err";
+          countBadge.textContent = text;
+          countBadge.style.color = errorCount > 0 ? "#ffd6da" : "#9fdfff";
+          countBadge.style.borderColor = errorCount > 0 ? "rgba(255,109,122,0.6)" : "rgba(0,161,228,0.45)";
+          countBadge.style.background = errorCount > 0 ? "rgba(255,109,122,0.12)" : "rgba(0,161,228,0.08)";
+        }
+
+        function setExpanded(nextExpanded) {
+          expanded = !!nextExpanded;
+          body.style.display = expanded ? "flex" : "none";
+          prevSection.style.display = (expanded && prevSessionEntries.length > 0) ? "flex" : "none";
+          clearButton.style.display = expanded ? "inline-block" : "none";
+          copyButton.style.display = expanded ? "inline-block" : "none";
+          root.style.maxHeight = expanded ? "min(46vh,420px)" : "unset";
+          root.style.width = expanded ? "min(560px,calc(100vw - 24px))" : "auto";
+        }
+
+        function setOverlayVisible(nextVisible) {
+          var visible = !!nextVisible;
+          root.style.display = visible ? "flex" : "none";
+          root.style.pointerEvents = visible ? "auto" : "none";
+          launcher.style.display = visible ? "none" : "inline-flex";
+        }
+
+        function makeLogRow(entry) {
+          var row = document.createElement("div");
+          var background =
+            entry.level === "error"
+              ? "rgba(255,109,122,0.16)"
+              : entry.level === "warn"
+                ? "rgba(255,196,94,0.14)"
+                : "rgba(0,161,228,0.07)";
+          row.style.cssText = [
+            "padding:6px 12px",
+            "white-space:pre-wrap",
+            "word-break:break-word",
+            "border-bottom:1px solid rgba(255,255,255,0.05)",
+            "background:" + background,
+          ].join(";");
+          row.textContent = entry.text;
+          return row;
+        }
+
+        function render() {
+          updateBadge();
+          if (!expanded) return;
+
+          body.replaceChildren();
+          if (entries.length === 0) {
+            var empty = document.createElement("div");
+            empty.textContent = "No logs yet";
+            empty.style.cssText = "padding:8px 12px;color:rgba(236,247,255,0.7);";
+            body.appendChild(empty);
+            return;
+          }
+
+          entries.forEach(function (entry) { body.appendChild(makeLogRow(entry)); });
+          body.scrollTop = body.scrollHeight;
+        }
+
+        function renderPrevSection() {
+          if (prevSessionEntries.length === 0) return;
+          prevSectionLabel.textContent = "Prev crash session - " + prevSessionEntries.length + " logs";
+          while (prevSection.children.length > 1) prevSection.removeChild(prevSection.lastChild);
+          prevSessionEntries.forEach(function (entry) { prevSection.appendChild(makeLogRow(entry)); });
+          prevSection.scrollTop = prevSection.scrollHeight;
+        }
+
+        function pad(value, length) {
+          var text = String(value);
+          while (text.length < length) text = "0" + text;
+          return text;
+        }
+
+        function formatNow() {
+          var d = new Date();
+          return "[" + pad(d.getHours(), 2) + ":" + pad(d.getMinutes(), 2) + ":" + pad(d.getSeconds(), 2) + "." + pad(d.getMilliseconds(), 3) + "]";
+        }
+
+        function argsToText(args) {
+          return Array.prototype.slice.call(args).map(function (value) {
+            if (value instanceof Error) return value.stack || value.message;
+            if (typeof value === "string") return value;
+            try { return JSON.stringify(value); } catch (_jsonError) { return String(value); }
+          }).join(" ");
+        }
+
+        function persistToStorage() {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+              sessionId: SESSION_ID,
+              ts: Date.now(),
+              entries: entries.slice(-300),
+            }));
+          } catch (_persistError) {}
+        }
+
+        function saveToStorage(delayMs) {
+          if (saveTimer) clearTimeout(saveTimer);
+          var nextDelay = typeof delayMs === "number" ? delayMs : 150;
+          if (nextDelay <= 0) {
+            persistToStorage();
+            return;
+          }
+          saveTimer = setTimeout(persistToStorage, nextDelay);
+        }
+
+        function push(level, message) {
+          var text = formatNow() + " " + level.toUpperCase() + " " + message;
+          entries.push({ level: level, text: text });
+          if (level === "error") {
+            errorCount += 1;
+            if (AUTO_EXPAND_ON_ERROR && !expanded) setExpanded(true);
+          }
+          if (entries.length > maxEntries) {
+            entries.splice(0, entries.length - maxEntries);
+          }
+          saveToStorage(level === "error" ? 0 : 150);
+          render();
+        }
+
+        function patchConsoleMethod(methodName, level) {
+          var original = console && console[methodName];
+          if (typeof original !== "function") return;
+          originalConsole[methodName] = original.bind(console);
+          console[methodName] = function () {
+            try { push(level, argsToText(arguments)); } catch (_error) {}
+            return originalConsole[methodName].apply(console, arguments);
+          };
+        }
+
+        function patchConsole() {
+          if (consolePatched) return;
+          patchConsoleMethod("log", "info");
+          patchConsoleMethod("info", "info");
+          patchConsoleMethod("warn", "warn");
+          patchConsoleMethod("error", "error");
+          patchConsoleMethod("debug", "debug");
+          consolePatched = true;
+          push("info", "Console monkey patch enabled");
+        }
+
+        function assetName(url) {
+          try {
+            var parsed = new URL(url, window.location.href);
+            return parsed.pathname.split("/").slice(-2).join("/");
+          } catch (_urlError) {
+            return String(url);
+          }
+        }
+
+        function patchFetch() {
+          if (!window.fetch || window.fetch.__prebootPatched) return;
+          var originalFetch = window.fetch.bind(window);
+          window.fetch = function () {
+            var input = arguments[0];
+            var url = typeof input === "string" ? input : input && input.url ? input.url : "";
+            var label = assetName(url);
+            pendingFetches[label] = true;
+            push("debug", "fetch start: " + label);
+            return originalFetch.apply(window, arguments).then(function (response) {
+              delete pendingFetches[label];
+              if (!response.ok) push("warn", "fetch " + response.status + ": " + label);
+              else push("debug", "fetch ok: " + label);
+              return response;
+            }).catch(function (error) {
+              delete pendingFetches[label];
+              push("error", "fetch failed: " + label + " " + (error && error.message ? error.message : String(error)));
+              throw error;
+            });
+          };
+          window.fetch.__prebootPatched = true;
+        }
+
+        function patchXHR() {
+          if (!window.XMLHttpRequest || XMLHttpRequest.prototype.__prebootPatched) return;
+          var open = XMLHttpRequest.prototype.open;
+          var send = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            this.__prebootUrl = url;
+            return open.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function () {
+            var xhr = this;
+            var label = assetName(xhr.__prebootUrl || "");
+            pendingFetches[label] = true;
+            push("debug", "xhr start: " + label);
+            xhr.addEventListener("loadend", function () {
+              delete pendingFetches[label];
+              if (xhr.status >= 400) push("warn", "xhr " + xhr.status + ": " + label);
+              else push("debug", "xhr done: " + label);
+            });
+            return send.apply(xhr, arguments);
+          };
+          XMLHttpRequest.prototype.__prebootPatched = true;
+        }
+
+        function describeCanvas(canvas) {
+          if (!canvas) return "canvas";
+          var label = canvas.id ? "#" + canvas.id : canvas.getAttribute("aria-label") || "canvas";
+          var width = canvas.width || canvas.clientWidth || 0;
+          var height = canvas.height || canvas.clientHeight || 0;
+          return label + " (" + width + "x" + height + ")";
+        }
+
+        function attachCanvasLogger(canvas) {
+          if (!canvas || canvas.__prebootCanvasHooked) return;
+          canvas.__prebootCanvasHooked = true;
+          push("info", "Canvas detected: " + describeCanvas(canvas));
+          canvas.addEventListener("webglcontextlost", function (event) {
+            push("error", "WebGL context lost on " + describeCanvas(canvas) + (event && event.statusMessage ? ": " + event.statusMessage : ""));
+          }, false);
+          canvas.addEventListener("webglcontextrestored", function () {
+            push("warn", "WebGL context restored on " + describeCanvas(canvas));
+          }, false);
+        }
+
+        function scanCanvases() {
+          var canvases = document.querySelectorAll("canvas");
+          Array.prototype.forEach.call(canvases, attachCanvasLogger);
+        }
+
+        function patchCanvasGetContext() {
+          if (!window.HTMLCanvasElement || !HTMLCanvasElement.prototype) return;
+          if (HTMLCanvasElement.prototype.__prebootGetContextPatched) return;
+          var origGetContext = HTMLCanvasElement.prototype.getContext;
+          if (typeof origGetContext !== "function") return;
+          HTMLCanvasElement.prototype.getContext = function () {
+            attachCanvasLogger(this);
+            var contextType = typeof arguments[0] === "string" ? arguments[0] : "unknown";
+            if (!this.__prebootContextTypes) this.__prebootContextTypes = {};
+            if (!this.__prebootContextTypes[contextType]) {
+              this.__prebootContextTypes[contextType] = true;
+              push("info", "Canvas getContext(" + contextType + ") on " + describeCanvas(this));
+            }
+            return origGetContext.apply(this, arguments);
+          };
+          HTMLCanvasElement.prototype.__prebootGetContextPatched = true;
+        }
+
+        var toggleButton = makeButton("Close", function () { setOverlayVisible(false); });
+        var clearButton = makeButton("Clear", function () {
+          entries = [];
+          errorCount = 0;
+          try { localStorage.removeItem(STORAGE_KEY); } catch (_e) {}
+          render();
         });
-        return {
-          info: function () { push("info", Array.prototype.slice.call(arguments).join(" ")); },
-          warn: function () { push("warn", Array.prototype.slice.call(arguments).join(" ")); },
-          error: function () { push("error", Array.prototype.slice.call(arguments).join(" ")); },
+        var copyButton = makeButton("Copy", function () {
+          var lines = [];
+          if (prevSessionEntries.length > 0) {
+            lines.push("=== Previous crash session ===");
+            prevSessionEntries.forEach(function (e) { lines.push(e.text); });
+            lines.push("=== Current session ===");
+          }
+          entries.forEach(function (e) { lines.push(e.text); });
+          var text = lines.join("\\n");
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () {
+              copyButton.textContent = "Copied!";
+              setTimeout(function () { copyButton.textContent = "Copy"; }, 1500);
+            }).catch(function () {
+              prompt("Copy logs (select all, copy):", text);
+            });
+          } else {
+            prompt("Copy logs (select all, copy):", text);
+          }
+        });
+
+        launcher.addEventListener("click", function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          setOverlayVisible(true);
+          setExpanded(true);
+          render();
+        });
+
+        actions.appendChild(countBadge);
+        actions.appendChild(toggleButton);
+        actions.appendChild(clearButton);
+        actions.appendChild(copyButton);
+        header.appendChild(title);
+        header.appendChild(actions);
+        root.appendChild(header);
+        root.appendChild(prevSection);
+        root.appendChild(body);
+
+        document.documentElement.appendChild(root);
+        document.documentElement.appendChild(launcher);
+
+        var rootObserver = new MutationObserver(function () {
+          if (!document.documentElement.contains(root)) document.documentElement.appendChild(root);
+          if (!document.documentElement.contains(launcher)) document.documentElement.appendChild(launcher);
+        });
+        rootObserver.observe(document.documentElement, { childList: true });
+
+        if (prevSessionEntries.length > 0) renderPrevSection();
+        setExpanded(prevSessionEntries.length > 0 || ALWAYS_EXPANDED);
+        setOverlayVisible(false);
+        patchConsole();
+        if (TRACK_NETWORK_REQUESTS) {
+          patchXHR();
+          patchFetch();
+        }
+        if (PATCH_CANVAS_CONTEXT) patchCanvasGetContext();
+        if (OBSERVE_CANVASES) {
+          scanCanvases();
+          var canvasObserver = new MutationObserver(function () { scanCanvases(); });
+          canvasObserver.observe(document.documentElement, { childList: true, subtree: true });
+        }
+        document.addEventListener("visibilitychange", function () {
+          push("info", "Visibility changed: " + document.visibilityState);
+        });
+        window.addEventListener("pagehide", function (event) {
+          push("warn", "pagehide persisted=" + String(!!(event && event.persisted)));
+        });
+        window.addEventListener("pageshow", function (event) {
+          push("info", "pageshow persisted=" + String(!!(event && event.persisted)));
+        });
+        render();
+        push("info", "Preboot logger ready (" + LOGGER_MODE + ")");
+
+        var loggerApi = {
+          log: function () { push("info", argsToText(arguments)); },
+          debug: function () { push("debug", argsToText(arguments)); },
+          info: function () { push("info", argsToText(arguments)); },
+          warn: function () { push("warn", argsToText(arguments)); },
+          error: function () { push("error", argsToText(arguments)); },
+          show: function () { setOverlayVisible(true); setExpanded(true); render(); },
+          hide: function () { setOverlayVisible(false); },
           getEntries: function () { return entries.slice(); },
+          getPendingAssets: function () { return Object.keys(pendingFetches).map(assetName); },
         };
+        window.__prebootLogEntries = entries;
+        window.__prebootLogger = loggerApi;
+        return loggerApi;
       })();`;
 }
 
@@ -501,26 +999,35 @@ async function readUnityBundleHtml(gamePath: string, options: { injectPrebootLog
   }
 
   let html = await readFile(htmlPath, "utf8");
-  html = html
-    .replace(/var buildUrl\s*=\s*["']Build["'];?\s*/g, "")
-    .replace(/buildUrl\s*\+\s*["']\/Build\.loader\.js["']/g, '"Build/Build.loader.js"')
-    .replace(/buildUrl\s*\+\s*["'](\/Build\.data(?:\.br|\.gz)?)["']/g, '"Build$1"')
-    .replace(/buildUrl\s*\+\s*["'](\/Build\.framework\.js(?:\.br|\.gz)?)["']/g, '"Build$1"')
-    .replace(/buildUrl\s*\+\s*["'](\/Build\.wasm(?:\.br|\.gz)?)["']/g, '"Build$1"')
-    .replace(/buildUrl\s*\+\s*["']\/StreamingAssets\/?["']/g, '"StreamingAssets"');
-  logInfo("  Expanded JS path concatenations to literal strings");
+  const hasOasizTemplateMarker = html.includes(`<meta name="oasiz-template" content="OasizDefault-v1">`);
+
+  if (!hasOasizTemplateMarker) {
+    html = html
+      .replace(/var buildUrl\s*=\s*["']Build["'];?\s*/g, "")
+      .replace(/buildUrl\s*\+\s*["']\/Build\.loader\.js["']/g, '"Build/Build.loader.js"')
+      .replace(/buildUrl\s*\+\s*["'](\/Build\.data(?:\.br|\.gz)?)["']/g, '"Build$1"')
+      .replace(/buildUrl\s*\+\s*["'](\/Build\.framework\.js(?:\.br|\.gz)?)["']/g, '"Build$1"')
+      .replace(/buildUrl\s*\+\s*["'](\/Build\.wasm(?:\.br|\.gz)?)["']/g, '"Build$1"')
+      .replace(/buildUrl\s*\+\s*["']\/StreamingAssets\/?["']/g, '"StreamingAssets"')
+      .replace(/(\bstreamingAssetsUrl\b\s*[:=]\s*)["']StreamingAssets\/?["']/g, '$1"StreamingAssets"');
+    logInfo("  Expanded JS path concatenations to literal strings");
+  } else {
+    logInfo("  Detected OasizDefault template marker; skipping buildUrl rewrites");
+  }
 
   const dynamicLoaderPattern = /var script\s*=\s*document\.createElement\("script"\);[\s\S]*?document\.body\.appendChild\(script\);/;
-  const loaderBlock = injectPrebootLogger
-    ? `var prebootUnityLoaderSrc = "Build/Build.loader.js";
-      ${getUnityPrebootLoggerBlock()}
-      prebootLogger.info("Preparing Unity loader:", prebootUnityLoaderSrc);
+  const loggedLoaderBlock = `var prebootUnityLoaderSrc = "Build/Build.loader.js";
       var unityLoadingBar = document.querySelector("#unity-loading-bar");
       if (unityLoadingBar) unityLoadingBar.style.display = "block";
+      prebootLogger.info("Preparing Unity loader:", prebootUnityLoaderSrc);
+
       var script = document.createElement("script");
       script.src = prebootUnityLoaderSrc;
-      script.onerror = function () { prebootLogger.error("Failed to load Unity loader script:", prebootUnityLoaderSrc); };
+      script.onerror = function () {
+        prebootLogger.error("Failed to load Unity loader script:", prebootUnityLoaderSrc);
+      };
       script.onload = function () {
+        prebootLogger.info("Unity loader script loaded");
         if (typeof createUnityInstance !== "function") {
           prebootLogger.error("Unity loader script did not expose createUnityInstance");
           alert("Unity loader script did not expose createUnityInstance");
@@ -530,6 +1037,9 @@ async function readUnityBundleHtml(gamePath: string, options: { injectPrebootLog
         createUnityInstance(canvas, config, function (progress) {
           var progressBar = document.querySelector("#unity-progress-bar-full");
           if (progressBar) progressBar.style.width = 100 * progress + "%";
+          if (progress === 0 || progress === 1) {
+            prebootLogger.info("Unity load progress:", Math.round(progress * 100) + "%");
+          }
         }).then(function (unityInstance) {
           var fullscreenButton = document.querySelector("#unity-fullscreen-button");
           prebootLogger.info("Unity instance created successfully");
@@ -544,20 +1054,54 @@ async function readUnityBundleHtml(gamePath: string, options: { injectPrebootLog
           alert(message);
         });
       };
-      document.body.appendChild(script);`
-    : getUnityPlainLoaderBlock();
+      document.body.appendChild(script);`;
 
-  if (dynamicLoaderPattern.test(html)) {
-    html = html.replace(dynamicLoaderPattern, loaderBlock);
+  const preserveTemplateLoaderBlock = hasOasizTemplateMarker && !injectPrebootLogger;
+  if (preserveTemplateLoaderBlock) {
+    logInfo("  Preserving custom template loader/fullscreen logic (no loader-block rewrite)");
+  } else if (dynamicLoaderPattern.test(html)) {
+    html = html.replace(dynamicLoaderPattern, injectPrebootLogger ? loggedLoaderBlock : getUnityPlainLoaderBlock());
     html = html.replace(/\s*<script src="Build\/Build\.loader\.js"><\/script>\s*/g, "\n    ");
     logInfo(injectPrebootLogger ? "  Replaced Unity loader injection with logged dynamic loading" : "  Replaced Unity loader injection with dynamic loading (no on-page logger)");
   } else {
     logInfo("  Warning: could not find dynamic script-loading block — HTML may not load correctly");
   }
 
-  html = html.replace(/\s*var loaderUrl\s*=\s*[^;]+;\s*/g, "\n      ");
+  if (!hasOasizTemplateMarker) {
+    html = html.replace(/\s*var loaderUrl\s*=\s*[^;]+;\s*/g, "\n      ");
+  }
+
   if (injectPrebootLogger) {
-    logInfo("  Injected Unity preboot logger overlay");
+    if (html.includes(`var prebootLogger = (() => {`)) {
+      html = html.replace(/var prebootLogger\s*=\s*\(\(\)\s*=>\s*\{[\s\S]*?\}\)\(\);/, getUnityPrebootLoggerBlock());
+      logInfo("  Refreshed Unity preboot logger overlay");
+    } else {
+      html = html.replace(/var canvas\s*=\s*document\.querySelector\(["']#unity-canvas["']\);\s*/, (match: string) => {
+        return match + "\n      " + getUnityPrebootLoggerBlock() + "\n      ";
+      });
+      if (!html.includes(`var prebootLogger = (() => {`)) {
+        html = html.replace(/<head([^>]*)>/i, `<head$1>\n    <script>\n      ${getUnityPrebootLoggerBlock()}\n    </script>`);
+      }
+      logInfo("  Injected Unity preboot logger overlay");
+    }
+
+    if (!html.includes(`window.addEventListener("unhandledrejection"`)) {
+      html = html.replace(/var warningBanner\s*=\s*document\.querySelector\(["']#unity-warning["']\);\s*/, (match: string) => {
+        return match + getGenericPrebootErrorHooksBlock();
+      });
+      logInfo("  Added Unity preload error hooks");
+    }
+
+    if (!html.includes(`prebootLogger.error("Unity banner:", msg)`)) {
+      html = html.replace(
+        /function unityShowBanner\(msg, type\) \{/,
+        `function unityShowBanner(msg, type) {
+        if (type === "error") prebootLogger.error("Unity banner:", msg);
+        else if (type === "warning") prebootLogger.warn("Unity banner:", msg);
+        else prebootLogger.info("Unity banner:", msg);`,
+      );
+      logInfo("  Mirrored Unity banner messages into preboot logger");
+    }
   } else {
     logInfo("  Skipped Unity preboot DOM logger (use --withlog to inject loader log overlay)");
   }
@@ -565,9 +1109,56 @@ async function readUnityBundleHtml(gamePath: string, options: { injectPrebootLog
   return html;
 }
 
-async function collectAssets(gamePath: string): Promise<Record<string, string>> {
+function getHtmlPrebootLoggerBlock(): string {
+  return getUnityPrebootLoggerBlock()
+    .replace(`var STORAGE_KEY = '__unity_preboot_logs';`, `var STORAGE_KEY = '__html_preboot_logs';`)
+    .replace(`var LOGGER_MODE = "unity";`, `var LOGGER_MODE = "html";`)
+    .replace(`var AUTO_EXPAND_ON_ERROR = true;`, `var AUTO_EXPAND_ON_ERROR = false;`)
+    .replace(`title.textContent = "Unity Logs";`, `title.textContent = "Game Logs";`);
+}
+
+function getGenericPrebootErrorHooksBlock(): string {
+  return `
+      window.addEventListener("error", function (event) {
+        var target = event.target;
+        if (target && target !== window && target.src) {
+          prebootLogger.error("Resource failed to load:", target.src);
+          return;
+        }
+        prebootLogger.error(
+          event.message || "Unknown window error",
+          event.filename ? "(" + event.filename + ":" + event.lineno + ")" : ""
+        );
+      }, true);
+
+      window.addEventListener("unhandledrejection", function (event) {
+        var reason = event.reason;
+        prebootLogger.error("Unhandled promise rejection:", reason && reason.stack ? reason.stack : String(reason));
+      });
+  `;
+}
+
+function injectPrebootLoggerIntoHtml(html: string): string {
+  if (html.includes(`window.__prebootLogger`) || html.includes(`var prebootLogger = (() => {`)) {
+    return html;
+  }
+
+  const loggerScript = `<script>\n${getHtmlPrebootLoggerBlock()}\n${getGenericPrebootErrorHooksBlock()}\n    </script>`;
+
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1>\n    ${loggerScript}`);
+  }
+
+  if (/<body[^>]*>/i.test(html)) {
+    return html.replace(/<body([^>]*)>/i, `<body$1>\n    ${loggerScript}`);
+  }
+
+  return `${loggerScript}\n${html}`;
+}
+
+async function collectAssets(gamePath: string): Promise<AssetEntry[]> {
   const distPath = join(gamePath, "dist");
-  const assets: Record<string, string> = {};
+  const assets: AssetEntry[] = [];
   if (!existsSync(distPath)) {
     logError("Dist folder not found");
     return assets;
@@ -585,15 +1176,19 @@ async function collectAssets(gamePath: string): Promise<Record<string, string>> 
     }
 
     const buffer = await readFile(filePath);
-    assets[relativePath] = buffer.toString("base64");
+    assets.push({
+      path: relativePath,
+      buffer,
+      contentType: getMimeType(filePath),
+    });
   }
 
   return assets;
 }
 
-async function collectUnityAssets(gamePath: string): Promise<Record<string, string>> {
+async function collectUnityAssets(gamePath: string): Promise<AssetEntry[]> {
   const buildDir = join(gamePath, "Build");
-  const assets: Record<string, string> = {};
+  const assets: AssetEntry[] = [];
   if (!existsSync(buildDir)) {
     logError("Unity Build folder not found");
     return assets;
@@ -612,12 +1207,16 @@ async function collectUnityAssets(gamePath: string): Promise<Record<string, stri
 
     logInfo(`  Collecting: ${relativePath} (${(fileSize / 1024 / 1024).toFixed(2)} MB)`);
     const buffer = await readFile(filePath);
-    assets[relativePath] = buffer.toString("base64");
+    assets.push({
+      path: relativePath,
+      buffer,
+      contentType: getMimeType(filePath),
+    });
   }
   return assets;
 }
 
-async function readBundleHtml(gamePath: string, useInlining: boolean = false): Promise<string> {
+async function readBundleHtml(gamePath: string, useInlining: boolean = false, injectPrebootLogger: boolean = false): Promise<string> {
   const distPath = join(gamePath, "dist", "index.html");
   if (!existsSync(distPath)) {
     throw new Error("Build output not found at dist/index.html");
@@ -628,6 +1227,10 @@ async function readBundleHtml(gamePath: string, useInlining: boolean = false): P
     logInfo("Detected multi-file build, inlining assets...");
     html = await inlineAssets(gamePath, html);
     logSuccess("All assets inlined into HTML");
+  }
+  if (injectPrebootLogger) {
+    html = injectPrebootLoggerIntoHtml(html);
+    logInfo("Injected HTML preboot logger overlay");
   }
   return html;
 }
@@ -661,59 +1264,303 @@ async function readThumbnail(gamePath: string): Promise<string | undefined> {
   return `data:${mimeType};base64,${buffer.toString("base64")}`;
 }
 
-function summarizeAssetPayload(assets: Record<string, string> | undefined): { count: number; approxBytes: number } {
+function summarizeAssetPayload(assets: AssetEntry[] | undefined): { count: number; approxBytes: number } {
   if (!assets) return { count: 0, approxBytes: 0 };
   return {
-    count: Object.keys(assets).length,
-    approxBytes: Object.values(assets).reduce((sum, base64) => sum + base64.length * 0.75, 0),
+    count: assets.length,
+    approxBytes: assets.reduce((sum, asset) => sum + asset.buffer.length, 0),
   };
 }
 
-async function uploadGame(payload: UploadPayload, token: string): Promise<{ gameId?: string; draftId?: string }> {
-  const apiUrl = getApiUrl("/api/upload/game");
-  const requestBody = JSON.stringify(payload);
-  logInfo(`Uploading ${payload.title} to ${apiUrl}... (${(requestBody.length / 1024 / 1024).toFixed(1)} MB)`);
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries: number = MAX_RETRIES): Promise<Response> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok || response.status < 500) return response;
 
-  try {
-    const response = await fetch(apiUrl, {
+      const errorText = await response.text().catch(() => "");
+      if (attempt < maxRetries) {
+        logInfo(`Server error ${response.status}, retry ${attempt}/${maxRetries}...`);
+      } else {
+        logError(`Server error ${response.status}: ${errorText}`);
+        return response;
+      }
+    } catch (error) {
+      if (attempt === maxRetries) throw error;
+      logInfo(`Network error, retry ${attempt}/${maxRetries}...`);
+    }
+    const delay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+  throw new Error("Max retries exceeded");
+}
+
+function uploadAuthHeaders(token: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+function buildCdnUrl(cdnBaseUrl: string, gameId: string, assetPath: string): string {
+  const safeKey = `game-assets/${gameId}/${assetPath}`
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return `${cdnBaseUrl}/${safeKey}`;
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function applyJsonJsAssetUrlRewrites(assetPath: string, assetBuffer: Buffer, assetUrlMap: Record<string, string>): Buffer {
+  if (!assetPath.endsWith(".json") && !assetPath.endsWith(".js") && !assetPath.endsWith(".mjs")) {
+    return assetBuffer;
+  }
+
+  let fileContent = assetBuffer.toString("utf8");
+  let modified = false;
+  const replacements: string[] = [];
+  const isJs = assetPath.endsWith(".js") || assetPath.endsWith(".mjs");
+
+  for (const [innerPath, innerCdnUrl] of Object.entries(assetUrlMap)) {
+    if (innerPath === assetPath) continue;
+    if (!isJs && (innerPath.endsWith(".js") || innerPath.endsWith(".css"))) continue;
+    if (isJs) {
+      const ext = innerPath.split(".").pop()?.toLowerCase() || "";
+      const assetExts = ["json", "png", "jpg", "jpeg", "webp", "gif", "svg", "mp3", "wav", "ogg", "m4a", "glb", "gltf"];
+      if (!assetExts.includes(ext)) continue;
+    }
+
+    const escapedInnerPath = escapeRegex(innerPath);
+    const qs = '(\\?[^"]*)?';
+    const patternsToTry = [`"${escapedInnerPath}${qs}"`, `"\\./${escapedInnerPath}${qs}"`, `"\\.\\./${escapedInnerPath}${qs}"`];
+
+    if (innerPath.includes("/")) {
+      const parts = innerPath.split("/");
+      const folderAndFile = parts.slice(-2).join("/");
+      if (folderAndFile !== innerPath) {
+        const escapedFolderAndFile = escapeRegex(folderAndFile);
+        patternsToTry.push(`"${escapedFolderAndFile}${qs}"`);
+        patternsToTry.push(`"\\./${escapedFolderAndFile}${qs}"`);
+        patternsToTry.push(`"\\.\\./${escapedFolderAndFile}${qs}"`);
+      }
+    }
+
+    for (const patternStr of patternsToTry) {
+      const pattern = new RegExp(patternStr, "g");
+      const before = fileContent;
+      fileContent = fileContent.replace(pattern, `"${innerCdnUrl}"`);
+      if (fileContent !== before) {
+        modified = true;
+        replacements.push(innerPath);
+        break;
+      }
+    }
+  }
+
+  if (modified) {
+    logInfo(`  Rewrote ${replacements.length} URLs in ${isJs ? "JS" : "JSON"}: ${assetPath}`);
+    return Buffer.from(fileContent, "utf8");
+  }
+  return assetBuffer;
+}
+
+async function uploadFileToR2(signedUrl: string, buffer: Buffer, contentType: string, path: string): Promise<void> {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": contentType },
+        body: buffer,
+      });
+      if (response.ok) return;
+      if (attempt < MAX_RETRIES && response.status >= 500) {
+        logInfo(`  R2 PUT ${path} failed (${response.status}), retry ${attempt}/${MAX_RETRIES}...`);
+      } else {
+        throw new Error(`R2 PUT failed for ${path}: ${response.status}`);
+      }
+    } catch (error) {
+      if (attempt === MAX_RETRIES) throw error;
+      logInfo(`  R2 PUT ${path} network error, retry ${attempt}/${MAX_RETRIES}...`);
+    }
+    const delay = Math.min(1000 * 2 ** (attempt - 1), 10000);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+}
+
+async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      results[index] = await tasks[index]();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+async function uploadGame(payload: UploadPayload, token: string): Promise<{ gameId?: string; draftId?: string; gameUrl?: string }> {
+  const startTime = Date.now();
+  const uploadBaseUrl = getApiUrl("/api/upload/game");
+
+  logInfo(`Initializing upload for "${payload.title}" via ${uploadBaseUrl}/init...`);
+  const initRes = await fetchWithRetry(`${uploadBaseUrl}/init`, {
+    method: "POST",
+    headers: uploadAuthHeaders(token),
+    body: JSON.stringify({
+      title: payload.title,
+      email: payload.email,
+      description: payload.description,
+      category: payload.category,
+      gameId: payload.gameId,
+      isMultiplayer: payload.isMultiplayer,
+      maxPlayers: payload.maxPlayers,
+      verticalOnly: payload.verticalOnly,
+    }),
+  });
+
+  if (!initRes.ok) {
+    const errorText = await initRes.text();
+    logError(`Init failed (${initRes.status}): ${errorText}`);
+    throw new Error("Upload init failed");
+  }
+
+  const initResult = (await initRes.json()) as {
+    gameId: string;
+    draftId?: string;
+    isUpdate: boolean;
+  };
+  const { gameId, isUpdate } = initResult;
+  logSuccess(`${isUpdate ? "Updating" : "Creating"} game ${gameId} (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+
+  const assets = payload.assets ?? [];
+  const allAssetPaths = assets.map((asset) => asset.path);
+
+  if (assets.length > 0) {
+    const totalSize = assets.reduce((sum, asset) => sum + asset.buffer.length, 0);
+    logInfo(`Uploading ${assets.length} assets (${(totalSize / 1024 / 1024).toFixed(1)} MB) via pre-signed URLs...`);
+
+    const presignStart = Date.now();
+    const presignRes = await fetchWithRetry(`${uploadBaseUrl}/${gameId}/presign`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: requestBody,
+      headers: uploadAuthHeaders(token),
+      body: JSON.stringify({
+        assets: assets.map((asset) => ({
+          path: asset.path,
+          contentType: asset.contentType,
+        })),
+      }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logError(`Upload failed (${response.status}): ${errorText}`);
-      if (response.status === 413) {
-        logError("Payload exceeds the API/edge limit (often ~100MB). Base64 JSON is ~4/3 the size of your dist/ assets. Remove or compress large files under public/ (or use --inline only if the bundle stays small), then rebuild.");
-      }
-      throw new Error("Upload failed");
+    if (!presignRes.ok) {
+      const errorText = await presignRes.text();
+      logError(`Presign failed (${presignRes.status}): ${errorText}`);
+      throw new Error("Upload presign failed");
     }
 
-    const result = (await response.json()) as { gameId?: string; draftId?: string };
-    logSuccess("Upload complete!");
-    if (result.gameId) {
-      logSuccess("Uploaded game successfully");
+    const { cdnBaseUrl, urls: signedUrls } = (await presignRes.json()) as {
+      cdnBaseUrl: string;
+      urls: Record<string, string>;
+    };
+    logSuccess(`Got ${Object.keys(signedUrls).length} signed URLs (${((Date.now() - presignStart) / 1000).toFixed(1)}s)`);
+
+    const cdnUrlMap: Record<string, string> = {};
+    for (const assetPath of allAssetPaths) {
+      cdnUrlMap[assetPath] = buildCdnUrl(cdnBaseUrl, gameId, assetPath);
     }
-    return result;
-  } catch (error) {
-    if (error instanceof Error && error.message === "Upload failed") throw error;
-    logError(`Upload request failed: ${String(error)}`);
-    throw error;
+
+    const assetBuffers = new Map<string, Buffer>();
+    for (const asset of assets) {
+      assetBuffers.set(asset.path, applyJsonJsAssetUrlRewrites(asset.path, asset.buffer, cdnUrlMap));
+    }
+
+    const uploadStart = Date.now();
+    let uploaded = 0;
+    const uploadTasks = assets.map((asset) => async () => {
+      const signedUrl = signedUrls[asset.path];
+      if (!signedUrl) {
+        throw new Error(`No signed URL for ${asset.path}`);
+      }
+      const buffer = assetBuffers.get(asset.path) ?? asset.buffer;
+      await uploadFileToR2(signedUrl, buffer, asset.contentType, asset.path);
+      uploaded += 1;
+      if (uploaded % 5 === 0 || uploaded === assets.length) {
+        logInfo(`  ${uploaded}/${assets.length} assets uploaded...`);
+      }
+    });
+
+    await runWithConcurrency(uploadTasks, UPLOAD_CONCURRENCY);
+    logSuccess(`All ${assets.length} assets uploaded to R2 (${((Date.now() - uploadStart) / 1000).toFixed(1)}s)`);
   }
+
+  logInfo("Uploading HTML and finalizing...");
+  const syncStart = Date.now();
+  const syncRes = await fetchWithRetry(`${uploadBaseUrl}/${gameId}/sync-html`, {
+    method: "POST",
+    headers: uploadAuthHeaders(token),
+    body: JSON.stringify({
+      bundleHtml: payload.bundleHtml,
+      allAssetPaths,
+      isNewGame: !isUpdate,
+    }),
+  });
+
+  if (!syncRes.ok) {
+    const errorText = await syncRes.text();
+    logError(`sync-html failed (${syncRes.status}): ${errorText}`);
+    throw new Error("Upload sync-html failed");
+  }
+
+  const syncResult = (await syncRes.json()) as {
+    gameId: string;
+    draftId?: string;
+    r2Key?: string;
+    gameUrl?: string;
+  };
+  logSuccess(`HTML synced (${((Date.now() - syncStart) / 1000).toFixed(1)}s)`);
+
+  if (payload.thumbnailBase64) {
+    logInfo("Uploading thumbnail...");
+    const thumbRes = await fetchWithRetry(`${uploadBaseUrl}/${gameId}/thumbnail`, {
+      method: "POST",
+      headers: uploadAuthHeaders(token),
+      body: JSON.stringify({ thumbnail: payload.thumbnailBase64 }),
+    });
+    if (thumbRes.ok) {
+      logSuccess("Thumbnail uploaded");
+    } else {
+      logInfo("Thumbnail upload failed (non-critical, will be auto-generated)");
+    }
+  }
+
+  const totalTime = ((Date.now() - startTime) / 1000).toFixed(1);
+  logSuccess(`Upload complete in ${totalTime}s!`);
+  if (syncResult.gameUrl) {
+    logSuccess(`Game URL: ${syncResult.gameUrl}`);
+  }
+
+  return {
+    gameId: syncResult.gameId || gameId,
+    draftId: syncResult.draftId || initResult.draftId,
+    gameUrl: syncResult.gameUrl,
+  };
 }
 
 async function validateAuthForUpload(): Promise<{ token: string; creatorEmail: string }> {
   const token = await requireAuthToken();
   const storedCredentials = await readStoredCredentials();
-  const creatorEmail = storedCredentials?.email;
+  const creatorEmail = storedCredentials?.email || process.env.OASIZ_EMAIL;
   if (!creatorEmail) {
-    logError("No creator email found in saved login credentials");
+    logError("No creator email found in saved login credentials or OASIZ_EMAIL");
     console.log("");
-    console.log("Run `oasiz login` again so the CLI can save your registered Oasiz email.");
+    console.log("Run `oasiz login` again so the CLI can save your registered Oasiz email, or set OASIZ_EMAIL.");
     throw new Error("Missing creator email");
   }
   return { token, creatorEmail };
@@ -757,11 +1604,11 @@ export function printUploadHelp(): void {
   console.log("  --skip-build   Skip the build step (use existing dist/)");
   console.log("  --dry-run      Build but don't upload (test mode)");
   console.log("  --inline       Inline all assets into HTML (legacy mode)");
-  console.log("  --withlog      Unity WebGL only: inject on-page loader log overlay");
+  console.log("  --withlog      Inject on-page preboot log overlay into uploaded HTML");
   console.log("  --activate     Activate uploaded draft if the API returns a draftId");
   console.log("  --help, -h     Show this help message");
   console.log("");
-  console.log("By default, assets are uploaded separately for CDN delivery.");
+  console.log("By default, assets are uploaded via presigned URLs for CDN delivery.");
   console.log("Use --inline for games that need all assets in the HTML.");
   console.log("");
   console.log("Unity WebGL games:");
@@ -803,7 +1650,7 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
   }
 
   let bundleHtml: string;
-  let assets: Record<string, string> | undefined;
+  let assets: AssetEntry[] | undefined;
 
   if (isUnity) {
     logInfo("Unity game — skipping build step (pre-built WebGL export expected)");
@@ -820,7 +1667,7 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
       logInfo("Skipping build (--skip-build)");
     }
 
-    bundleHtml = await readBundleHtml(gamePath, useInlining);
+    bundleHtml = await readBundleHtml(gamePath, useInlining, unityInjectPrebootLogger);
     logSuccess(`Read bundle: ${(bundleHtml.length / 1024).toFixed(1)} KB`);
 
     if (!useInlining) {
@@ -859,9 +1706,11 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     console.log(`  Has Thumbnail: ${Boolean(payload.thumbnailBase64)}`);
     console.log(`  Vertical Only: ${payload.verticalOnly ?? true} (default: true)`);
     console.log(`  Bundle Size: ${(payload.bundleHtml.length / 1024).toFixed(1)} KB`);
-    console.log(`  Type: ${isUnity ? "Unity WebGL" : useInlining ? "Inline (legacy)" : "CDN Assets"}`);
+    console.log(`  Type: ${isUnity ? "Unity WebGL" : useInlining ? "Inline (legacy)" : "CDN Assets (presigned)"}`);
     if (assets) {
-      console.log(`  Assets: ${Object.keys(assets).length} files`);
+      const assetSummary = summarizeAssetPayload(assets);
+      console.log(`  Assets: ${assetSummary.count} files (${formatBytes(assetSummary.approxBytes)})`);
+      console.log("  Asset Transport: CDN assets via presigned R2 upload");
     }
     console.log(`  Game ID: ${payload.gameId || "(will be assigned)"}`);
     return;
@@ -896,6 +1745,17 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     logInfo("Upload succeeded, but the API did not return a draftId to activate");
   }
 }
+
+export const __uploadTestHooks = {
+  applyJsonJsAssetUrlRewrites,
+  buildCdnUrl,
+  collectAssets,
+  collectUnityAssets,
+  injectPrebootLoggerIntoHtml,
+  readBundleHtml,
+  readUnityBundleHtml,
+  summarizeAssetPayload,
+};
 
 export async function runUploadCli(args: string[] = []): Promise<void> {
   loadEnvSync();

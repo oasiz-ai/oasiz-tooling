@@ -20,7 +20,6 @@ import {
   getMyGames,
   getUploadPreflight,
   postActivateDraft,
-  postUploadGame,
   type StudioDraft,
 } from "./lib/api.ts";
 import {
@@ -61,7 +60,7 @@ function printHelp(): void {
   console.log("  --skip-build                Skip build step and use dist/");
   console.log("  --dry-run                   Build but do not upload");
   console.log("  --inline                    Inline all assets into HTML");
-  console.log("  --withlog                   Unity only: inject loader log overlay");
+  console.log("  --withlog                   Inject upload-time preboot log overlay");
   console.log("  horizontal | vertical       Override publish.json verticalOnly");
 }
 
