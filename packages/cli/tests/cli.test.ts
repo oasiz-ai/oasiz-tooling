@@ -114,11 +114,73 @@ test("runUploadCli supports deprecated list flag without throwing", async () => 
 });
 
 test("browser login callback binds listeners on localhost", async () => {
-  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
-  const source = await readFile(cliPath, "utf8");
+  const authPath = fileURLToPath(new URL("../src/lib/auth.ts", import.meta.url));
+  const source = await readFile(authPath, "utf8");
 
   assert.match(source, /server\.listen\(0,\s*"localhost"/);
   assert.match(source, /server\.listen\(callbackPort,\s*"localhost"/);
+});
+
+test("browser login callback settles and clears timeout", async () => {
+  await withTempProject(async (root) => {
+    const credentialsPath = join(root, "credentials.json");
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const previousWeb = process.env.OASIZ_WEB_URL;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let loginUrl = "";
+
+    process.env.OASIZ_CREDENTIALS_PATH = credentialsPath;
+    process.env.OASIZ_WEB_URL = "http://login.test";
+    console.log = (...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      logs.push(line);
+      if (line.includes("/cli-auth?")) {
+        loginUrl = line.trim();
+      }
+    };
+
+    try {
+      const loginPromise = runCli(["login", "--no-open"]);
+      const start = Date.now();
+      while (!loginUrl && Date.now() - start < 2000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(loginUrl, "expected login URL to be printed");
+
+      const parsed = new URL(loginUrl);
+      const callbackPort = parsed.searchParams.get("port");
+      const state = parsed.searchParams.get("state");
+      assert.ok(callbackPort);
+      assert.ok(state);
+
+      const callbackUrl =
+        "http://localhost:" +
+        callbackPort +
+        "/callback?token=test-token&email=test%40example.com&state=" +
+        encodeURIComponent(state);
+      const callbackResponse = await fetch(callbackUrl);
+      assert.equal(callbackResponse.status, 200);
+
+      await Promise.race([
+        loginPromise,
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("login did not settle")), 2000);
+        }),
+      ]);
+
+      assert.match(logs.join("\n"), /Login successful\./);
+      const saved = JSON.parse(await readFile(credentialsPath, "utf8")) as { token?: string; email?: string };
+      assert.equal(saved.token, "test-token");
+      assert.equal(saved.email, "test@example.com");
+    } finally {
+      console.log = originalLog;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+      if (previousWeb === undefined) delete process.env.OASIZ_WEB_URL;
+      else process.env.OASIZ_WEB_URL = previousWeb;
+    }
+  });
 });
 
 test("api errors include target request URL", async () => {
@@ -163,10 +225,13 @@ test("upload CLI keeps login-based auth flow", async () => {
   const uploadCliPath = fileURLToPath(new URL("../src/upload-cli.ts", import.meta.url));
   const source = await readFile(uploadCliPath, "utf8");
 
-  assert.match(source, /await requireAuthToken\(\)/);
+  assert.match(source, /await resolveAuthToken\(\)/);
   assert.match(source, /await readStoredCredentials\(\)/);
-  assert.match(source, /process\.env\.OASIZ_EMAIL/);
-  assert.match(source, /No creator email found in saved login credentials or OASIZ_EMAIL/);
+  assert.match(source, /process\.env\.OASIZ_EMAIL \|\| storedCredentials\?\.email/);
+  assert.match(source, /await runBrowserLoginFlow\(true\)/);
+  assert.match(source, /await saveStoredCredentials\(/);
+  assert.match(source, /if \(!token\)/);
+  assert.match(source, /if \(!creatorEmail\)/);
 });
 
 test("upload dry-run reports presigned CDN upload shape", async () => {

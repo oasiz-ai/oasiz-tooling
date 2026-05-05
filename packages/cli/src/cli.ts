@@ -1,10 +1,7 @@
 import { existsSync } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
-import { createServer as createNetServer } from "node:net";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { spawn } from "node:child_process";
 import { stdin, stdout } from "node:process";
 import { formatBytes, summarizeDist } from "./lib/build.ts";
 import {
@@ -14,6 +11,7 @@ import {
   readStoredCredentials,
   requireAuthToken,
   resolveAuthToken,
+  runBrowserLoginFlow,
   saveStoredCredentials,
 } from "./lib/auth.ts";
 import {
@@ -706,206 +704,6 @@ async function commandGames(): Promise<void> {
     const updated = game.updatedAt ? formatRelativeTime(game.updatedAt) : "-";
     console.log(pad(title, 32) + pad(drafts, 8) + pad(live, 10) + updated);
   });
-}
-
-async function openInBrowser(url: string): Promise<void> {
-  const platform = process.platform;
-
-  const spawnDetached = (command: string, args: string[]): void => {
-    const child = spawn(command, args, {
-      stdio: "ignore",
-      detached: true,
-    });
-    child.unref();
-  };
-
-  if (platform === "darwin") {
-    spawnDetached("open", [url]);
-    return;
-  }
-  if (platform === "linux") {
-    spawnDetached("xdg-open", [url]);
-    return;
-  }
-  if (platform === "win32") {
-    spawnDetached("cmd", ["/c", "start", "", url]);
-    return;
-  }
-
-  fail("Unsupported platform for open command: " + platform);
-}
-
-interface BrowserLoginResult {
-  token: string;
-  email?: string;
-  expiresAt?: string;
-}
-
-async function findOpenPort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const server = createNetServer();
-
-    server.once("error", (error) => {
-      reject(error);
-    });
-
-    // Match the game-studio CLI so browser callbacks can resolve over either
-    // loopback family on machines where localhost prefers IPv6.
-    server.listen(0, "localhost", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("Failed to allocate callback port.")));
-        return;
-      }
-
-      const port = address.port;
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-async function runBrowserLoginFlow(openBrowser: boolean): Promise<BrowserLoginResult> {
-  const state = crypto.randomUUID();
-  const webBase = getWebBaseUrl();
-  const callbackPort = await findOpenPort();
-  let settled = false;
-  let resolveLogin!: (value: BrowserLoginResult) => void;
-  let rejectLogin!: (error: Error) => void;
-  const callbackPromise = new Promise<BrowserLoginResult>((resolve, reject) => {
-    resolveLogin = resolve;
-    rejectLogin = reject;
-  });
-
-  const server = createHttpServer((req, res) => {
-    const url = new URL(req.url || "/", "http://localhost:" + String(callbackPort));
-    if (url.pathname === "/favicon.ico") {
-      res.statusCode = 204;
-      res.end();
-      return;
-    }
-    if (url.pathname !== "/callback") {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not found");
-      return;
-    }
-
-    const returnedState = url.searchParams.get("state") || "";
-    const token = url.searchParams.get("token") || "";
-    const email = url.searchParams.get("email") || undefined;
-    const expiresAt = url.searchParams.get("expiresAt") || undefined;
-    const error = url.searchParams.get("error");
-
-    if (settled) {
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Already handled. You can close this tab.");
-      return;
-    }
-
-    if (error) {
-      settled = true;
-      rejectLogin(new Error("CLI auth failed: " + error));
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Login failed. You can close this tab.");
-      return;
-    }
-
-    if (!token || returnedState !== state) {
-      settled = true;
-      rejectLogin(new Error("Invalid callback from Oasiz auth flow."));
-      res.statusCode = 400;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Invalid callback payload. You can close this tab.");
-      return;
-    }
-
-    settled = true;
-    const loginResult: BrowserLoginResult = { token, email, expiresAt };
-    setTimeout(() => {
-      resolveLogin(loginResult);
-    }, 300);
-
-    const html = [
-      "<!doctype html>",
-      "<html>",
-      "<head>",
-      "<meta charset=\"utf-8\" />",
-      "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
-      "<title>Oasiz CLI Login Complete</title>",
-      "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">",
-      "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>",
-      "<link href=\"https://fonts.googleapis.com/css2?family=Kodchasan:wght@600&family=Montserrat:wght@400;600;700&display=swap\" rel=\"stylesheet\">",
-      "<style>",
-      ":root{--bg:#090f1f;--text:#f5f7ff;--muted:#b8c2de;--line:rgba(255,255,255,.16)}",
-      "html,body{height:100%;margin:0}",
-      "body{font-family:Montserrat,Segoe UI,Arial,sans-serif;background:#090f1f;color:var(--text);display:grid;place-items:center;overflow:hidden}",
-      ".card{position:relative;width:min(560px,calc(100vw - 32px));padding:26px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.03));backdrop-filter:blur(10px);box-shadow:0 26px 70px rgba(0,0,0,.45)}",
-      ".card::after{content:\"\";position:absolute;inset:0;border-radius:24px;pointer-events:none;background:linear-gradient(120deg,rgba(255,255,255,.08),rgba(255,255,255,0) 35%)}",
-      ".brand{font-family:Kodchasan,Montserrat,Segoe UI,Arial,sans-serif;font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:#dce5ff;opacity:.92;margin-bottom:14px}",
-      ".title{margin:0;font-size:28px;line-height:1.15;letter-spacing:-.01em}",
-      ".desc{margin:10px 0 0;color:var(--muted);font-size:16px;line-height:1.45}",
-      ".status{display:inline-flex;align-items:center;gap:10px;margin-top:16px;padding:8px 12px;border:1px solid rgba(140,209,255,.45);border-radius:999px;background:rgba(73,165,255,.14);font-size:13px;font-weight:600;color:#d7efff}",
-      ".dot{width:8px;height:8px;border-radius:50%;background:#8ef0c6;box-shadow:0 0 0 4px rgba(142,240,198,.16)}",
-      ".foot{margin-top:16px;color:#98a6cc;font-size:13px}",
-      "@media (max-width:480px){.title{font-size:23px}.desc{font-size:15px}}",
-      "</style>",
-      "</head>",
-      "<body>",
-      "<section class=\"card\">",
-      "<div class=\"brand\">OASIZ</div>",
-      "<h1 class=\"title\">CLI LOGIN COMPLETE</h1>",
-      "<p class=\"desc\">Authentication finished successfully. You can close this tab and continue in your terminal.</p>",
-      "<div class=\"status\"><span class=\"dot\"></span>Connected</div>",
-      "<p class=\"foot\">This window can now be closed.</p>",
-      "</section>",
-      "</body>",
-      "</html>",
-    ].join("");
-
-    res.statusCode = 200;
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.end(html);
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(callbackPort, "localhost", () => {
-      resolve();
-    });
-  });
-
-  try {
-    const loginUrl = webBase + "/cli-auth?port=" + String(callbackPort) + "&state=" + encodeURIComponent(state);
-    console.log("Open this URL to continue login:");
-    console.log("  " + loginUrl);
-    if (openBrowser) {
-      await openInBrowser(loginUrl);
-    }
-
-    const timeoutMs = 5 * 60 * 1000;
-    const timedResult = await Promise.race([
-      callbackPromise,
-      new Promise<BrowserLoginResult>((_resolve, reject) => {
-        setTimeout(() => reject(new Error("Timed out waiting for browser login callback.")), timeoutMs);
-      }),
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 900);
-    });
-    return timedResult;
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
 }
 
 async function commandLogin(argv: string[]): Promise<void> {

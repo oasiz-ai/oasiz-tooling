@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
-import { getApiUrl, readStoredCredentials, requireAuthToken } from "./lib/auth.ts";
+import { getApiUrl, readStoredCredentials, resolveAuthToken, runBrowserLoginFlow, saveStoredCredentials } from "./lib/auth.ts";
 import { type PublishConfig, writePublishConfig } from "./lib/game.ts";
 import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
@@ -1554,15 +1554,38 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
 }
 
 async function validateAuthForUpload(): Promise<{ token: string; creatorEmail: string }> {
-  const token = await requireAuthToken();
+  let token = await resolveAuthToken();
   const storedCredentials = await readStoredCredentials();
-  const creatorEmail = storedCredentials?.email || process.env.OASIZ_EMAIL;
-  if (!creatorEmail) {
-    logError("No creator email found in saved login credentials or OASIZ_EMAIL");
-    console.log("");
-    console.log("Run `oasiz login` again so the CLI can save your registered Oasiz email, or set OASIZ_EMAIL.");
-    throw new Error("Missing creator email");
+  let creatorEmail = process.env.OASIZ_EMAIL || storedCredentials?.email;
+
+  if (!token || !creatorEmail) {
+    logInfo(
+      !token
+        ? "No API token found; starting browser login..."
+        : "No creator email found in OASIZ_EMAIL or saved login credentials; starting browser login...",
+    );
+    const loginResult = await runBrowserLoginFlow(true);
+    await saveStoredCredentials({
+      token: loginResult.token,
+      email: loginResult.email,
+      createdAt: new Date().toISOString(),
+    });
+    token = loginResult.token;
+    creatorEmail = loginResult.email || creatorEmail;
+    logSuccess("Login successful");
+    if (loginResult.email) {
+      logSuccess("Signed in as " + loginResult.email);
+    }
   }
+
+  if (!token) {
+    throw new Error("No API token found. Set OASIZ_CLI_TOKEN or OASIZ_UPLOAD_TOKEN, or run `oasiz login`.");
+  }
+
+  if (!creatorEmail) {
+    throw new Error("No creator email found. Set OASIZ_EMAIL, or run `oasiz login` so the CLI can save your registered Oasiz email.");
+  }
+
   return { token, creatorEmail };
 }
 
