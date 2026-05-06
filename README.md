@@ -25,11 +25,15 @@ oasiz.submitScore(1200);
 
 ```bash
 npx @oasiz/cli upload block-blast
+npx @oasiz/cli game-server create arena --image us-central1-docker.pkg.dev/.../template:auto-20hz
 ```
 
 The CLI expects to be run from the root of a game-studio style repository that
 contains game folders, optional `publish.json` metadata, and an optional `.env`
 with `OASIZ_UPLOAD_TOKEN`, `OASIZ_EMAIL`, and `OASIZ_API_URL`.
+Game server creation defaults to
+`https://api.oasiz.ai` and can be overridden with
+`OASIZ_GAME_SERVER_API_URL` or `--api-url`.
 
 ## SDK Releases
 

@@ -197,6 +197,152 @@ test("api errors include target request URL", async () => {
   assert.match(source, /Response preview: "/);
 });
 
+test("game-server create posts standalone request to api.oasiz.ai by default", async () => {
+  await withTempProject(async (root) => {
+    const previousGameServerApi = process.env.OASIZ_GAME_SERVER_API_URL;
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string; headers?: HeadersInit }> = [];
+
+    delete process.env.OASIZ_GAME_SERVER_API_URL;
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body, headers: init.headers });
+
+      return Response.json({
+        scope: "standalone",
+        slug: "arena",
+        status: "deployed",
+        url: "https://gs-standalone-arena.games.studio-stage.oasiz.ai",
+        public_key: "pub_test",
+        admin_key: "adm_test",
+      });
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli(["game-server", "create", "arena", "--image", "registry.test/template:auto", "--json"]);
+      });
+
+      assert.match(output, /"public_key": "pub_test"/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousGameServerApi === undefined) delete process.env.OASIZ_GAME_SERVER_API_URL;
+      else process.env.OASIZ_GAME_SERVER_API_URL = previousGameServerApi;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://api.oasiz.ai/game-servers");
+    assert.equal(calls[0].method, "POST");
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    assert.deepEqual(JSON.parse(calls[0].body), {
+      custom_slug: "arena",
+      room_name: "arena",
+      entrypoint: "server",
+      client_update_hz: 20,
+      server_tick_hz: 0,
+      min_replicas: 1,
+      max_replicas: 10,
+      template_image: "registry.test/template:auto",
+    });
+  });
+});
+
+test("game-server create supports workspace-backed route and api-stage shorthand", async () => {
+  await withTempProject(async (root) => {
+    const previousGameServerApi = process.env.OASIZ_GAME_SERVER_API_URL;
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string }> = [];
+
+    delete process.env.OASIZ_GAME_SERVER_API_URL;
+    delete process.env.OASIZ_CLI_TOKEN;
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body });
+
+      return Response.json({
+        workspace_id: "0cfd10db",
+        scope: "workspace",
+        build_id: "gs-build-test",
+        slug: "arena",
+        status: "building",
+        url: "https://gs-0cfd10db-arena.games.studio-stage.oasiz.ai",
+      });
+    }) as typeof fetch;
+
+    let output = "";
+    try {
+      output = await captureOutput(async () => {
+        await runCli([
+          "servers",
+          "create",
+          "arena",
+          "--workspace",
+          "0cfd10db",
+          "--api-url",
+          "api-stage",
+          "--path",
+          "server",
+          "--entrypoint",
+          "rooms/index.ts",
+          "--build-command",
+          "npm run build",
+          "--min-replicas",
+          "2",
+          "--max-replicas",
+          "4",
+        ]);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousGameServerApi === undefined) delete process.env.OASIZ_GAME_SERVER_API_URL;
+      else process.env.OASIZ_GAME_SERVER_API_URL = previousGameServerApi;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.match(output, /Build ID: gs-build-test/);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db/game-servers");
+    assert.equal(calls[0].method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].body), {
+      custom_slug: "arena",
+      room_name: "arena",
+      entrypoint: "rooms/index.ts",
+      client_update_hz: 20,
+      server_tick_hz: 0,
+      min_replicas: 2,
+      max_replicas: 4,
+      path: "server",
+      build_command: "npm run build",
+    });
+  });
+});
+
 test("getWebBaseUrl defaults to production oasiz.ai", () => {
   const originalWeb = process.env.OASIZ_WEB_URL;
   const originalApi = process.env.OASIZ_API_URL;

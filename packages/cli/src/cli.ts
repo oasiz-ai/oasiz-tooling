@@ -20,6 +20,7 @@ import {
   postActivateDraft,
   type StudioDraft,
 } from "./lib/api.ts";
+import { runGameServerCli } from "./game-server-cli.ts";
 import {
   getGamePath,
   isGameSlug,
@@ -43,6 +44,7 @@ function printHelp(): void {
   console.log("    --template <name>         Use template from package assets");
   console.log("  oasiz info                  Show all commands");
   console.log("  oasiz upload <game>         Build + upload with draft wizard");
+  console.log("  oasiz game-server create    Create a Colyseus game server");
   console.log("  oasiz versions <game>       List studio drafts for a game");
   console.log("  oasiz activate <game>       Promote draft to live version");
   console.log("  oasiz list                  List local game folders");
@@ -799,6 +801,12 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
         return;
       case "upload":
         await runUploadCliImpl(argv.slice(1));
+        return;
+      case "game-server":
+      case "game-servers":
+      case "server":
+      case "servers":
+        await runGameServerCli(argv.slice(1));
         return;
       case "versions":
         if (!value) fail("Usage: oasiz versions <game>");
