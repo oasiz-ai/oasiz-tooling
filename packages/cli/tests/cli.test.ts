@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +88,16 @@ async function requestBodyText(body: BodyInit | null | undefined): Promise<strin
   if (body instanceof Uint8Array) return Buffer.from(body).toString("utf8");
   if (body instanceof ArrayBuffer) return Buffer.from(body).toString("utf8");
   return String(body);
+}
+
+async function requestBodyBuffer(body: BodyInit | null | undefined): Promise<Buffer> {
+  if (body === undefined || body === null) return Buffer.alloc(0);
+  if (typeof body === "string") return Buffer.from(body, "utf8");
+  if (Buffer.isBuffer(body)) return body;
+  if (body instanceof Uint8Array) return Buffer.from(body);
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (body instanceof Blob) return Buffer.from(await body.arrayBuffer());
+  return Buffer.from(String(body), "utf8");
 }
 
 test("runCli shows root help without throwing", async () => {
@@ -337,6 +348,128 @@ test("game-server create supports workspace-backed route and api-stage shorthand
       server_tick_hz: 0,
       min_replicas: 2,
       max_replicas: 4,
+      path: "server",
+      build_command: "npm run build",
+    });
+  });
+});
+
+test("game-server create uploads local source bundle before creating server", async () => {
+  await withTempProject(async (root) => {
+    const sourcePath = join(root, "server");
+    await mkdir(join(sourcePath, "rooms"), { recursive: true });
+    await writeFile(
+      join(sourcePath, "package.json"),
+      JSON.stringify({ name: "arena-server", scripts: { build: "echo build" } }, null, 2),
+      "utf8",
+    );
+    await writeFile(join(sourcePath, "rooms", "index.ts"), "export async function registerRooms() {}\n", "utf8");
+    await mkdir(join(sourcePath, "node_modules", "ignored"), { recursive: true });
+    await writeFile(join(sourcePath, "node_modules", "ignored", "index.js"), "ignored\n", "utf8");
+
+    const previousGameServerApi = process.env.OASIZ_GAME_SERVER_API_URL;
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: Buffer; headers?: HeadersInit }> = [];
+
+    delete process.env.OASIZ_GAME_SERVER_API_URL;
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyBuffer(init.body);
+      calls.push({ url, method, body, headers: init.headers });
+
+      if (url === "https://api.oasiz.ai/game-servers/uploads") {
+        return Response.json({
+          source_upload_id: "gs-src_test",
+          upload_url: "https://api.oasiz.ai/game-servers/uploads/token-test",
+          expires_at: "2026-05-05T23:59:00Z",
+        });
+      }
+
+      if (url === "https://api.oasiz.ai/game-servers/uploads/token-test") {
+        return new Response("", { status: 200 });
+      }
+
+      if (url === "https://api.oasiz.ai/game-servers") {
+        return Response.json({
+          scope: "standalone",
+          build_id: "gs-build-test",
+          slug: "arena",
+          status: "building",
+          url: "https://gs-standalone-arena.games.studio-stage.oasiz.ai",
+        });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "game-server",
+          "create",
+          "arena",
+          "--source",
+          "server",
+          "--entrypoint",
+          "rooms/index.ts",
+          "--build-command",
+          "npm run build",
+        ]);
+      });
+
+      assert.match(output, /Source upload id: gs-src_test/);
+      assert.match(output, /Build ID: gs-build-test/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousGameServerApi === undefined) delete process.env.OASIZ_GAME_SERVER_API_URL;
+      else process.env.OASIZ_GAME_SERVER_API_URL = previousGameServerApi;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.equal(calls.length, 3);
+    const initCall = calls[0];
+    const putCall = calls[1];
+    const createCall = calls[2];
+    assert.equal(initCall.url, "https://api.oasiz.ai/game-servers/uploads");
+    assert.equal(initCall.method, "POST");
+    assert.equal((initCall.headers as Record<string, string>).Authorization, "Bearer env-token");
+    const initBody = JSON.parse(initCall.body.toString("utf8")) as {
+      filename: string;
+      content_type: string;
+      sha256: string;
+    };
+    assert.equal(initBody.filename, "arena-server.tar.gz");
+    assert.equal(initBody.content_type, "application/gzip");
+
+    assert.equal(putCall.url, "https://api.oasiz.ai/game-servers/uploads/token-test");
+    assert.equal(putCall.method, "PUT");
+    assert.deepEqual([...putCall.body.slice(0, 2)], [0x1f, 0x8b]);
+    assert.equal(initBody.sha256, createHash("sha256").update(putCall.body).digest("hex"));
+    assert.equal((putCall.headers as Record<string, string>)["Content-Type"], "application/gzip");
+
+    assert.equal(createCall.url, "https://api.oasiz.ai/game-servers");
+    assert.equal(createCall.method, "POST");
+    assert.deepEqual(JSON.parse(createCall.body.toString("utf8")), {
+      custom_slug: "arena",
+      room_name: "arena",
+      entrypoint: "rooms/index.ts",
+      client_update_hz: 20,
+      server_tick_hz: 0,
+      min_replicas: 1,
+      max_replicas: 10,
+      source_upload_id: "gs-src_test",
       path: "server",
       build_command: "npm run build",
     });
