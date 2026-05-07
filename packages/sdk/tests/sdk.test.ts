@@ -363,6 +363,90 @@ test("getSafeAreaTop converts pixel bridge to percent of viewport height", () =>
   );
 });
 
+test("getSafeAreaTop uses visual viewport height when available", () => {
+  const safeAreaTop = withWindow(
+    {
+      getSafeAreaTop: () => 40,
+      innerHeight: 800,
+      visualViewport: { height: 400 },
+    },
+    () => getSafeAreaTop(),
+  );
+
+  assert.equal(safeAreaTop, 10);
+});
+
+test("getSafeAreaTop accepts string bridge values", () => {
+  assert.equal(
+    withWindow(
+      { getSafeAreaTopPercent: () => "8.5%" },
+      () => getSafeAreaTop(),
+    ),
+    8.5,
+  );
+  assert.equal(
+    withWindow(
+      { __OASIZ_SAFE_AREA_TOP__: "48px", innerHeight: 800 },
+      () => getSafeAreaTop(),
+    ),
+    6,
+  );
+});
+
+test("getSafeAreaTop falls back to CSS safe-area env", () => {
+  const probe = {
+    style: {} as Record<string, string>,
+    remove() {},
+  };
+  const fakeDocument = {
+    body: {
+      appendChild() {},
+      clientHeight: 0,
+    },
+    documentElement: { clientHeight: 0 },
+    createElement: () => probe,
+  };
+
+  const safeAreaTop = withWindow(
+    {
+      document: fakeDocument,
+      getComputedStyle: () => ({ paddingTop: "40px" }),
+      innerHeight: 800,
+    },
+    () => getSafeAreaTop(),
+  );
+
+  assert.equal(safeAreaTop, 5);
+});
+
+test("getSafeAreaTop normalizes physical-pixel bridge values with CSS env", () => {
+  const probe = {
+    style: {} as Record<string, string>,
+    remove() {},
+  };
+  const fakeDocument = {
+    body: {
+      appendChild() {},
+      clientHeight: 0,
+    },
+    documentElement: { clientHeight: 0 },
+    createElement: () => probe,
+  };
+
+  const safeAreaTop = withWindow(
+    {
+      devicePixelRatio: 3,
+      document: fakeDocument,
+      getComputedStyle: () => ({ paddingTop: "59px" }),
+      getSafeAreaTop: () => 177,
+      innerHeight: 852,
+    },
+    () => getSafeAreaTop(),
+  );
+
+  assert.ok(Math.abs(safeAreaTop - (59 / 852) * 100) < 0.0000001);
+});
+
 test("getSafeAreaTop uses percent bridge when present", () => {
   assert.equal(
     withWindow(

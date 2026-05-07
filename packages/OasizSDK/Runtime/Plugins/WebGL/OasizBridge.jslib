@@ -140,50 +140,190 @@ var OasizBridge = {
   // ---------------------------------------------------------------------------
 
   OasizGetSafeAreaTop: function () {
-    var pct = 0;
+    function toFiniteNumber(value) {
+      if (typeof value === "number" && isFinite(value)) {
+        return value;
+      }
+      if (typeof value === "string") {
+        var parsed = parseFloat(value.trim());
+        if (isFinite(parsed)) {
+          return parsed;
+        }
+      }
+      return null;
+    }
+
+    function clampPixels(value) {
+      var numeric = toFiniteNumber(value);
+      return numeric == null ? 0 : Math.max(0, numeric);
+    }
+
+    function normalizePercent(value) {
+      var numeric = toFiniteNumber(value);
+      return numeric == null ? null : Math.min(100, Math.max(0, numeric));
+    }
+
+    function viewportHeight() {
+      if (
+        window.visualViewport &&
+        typeof window.visualViewport.height === "number" &&
+        isFinite(window.visualViewport.height) &&
+        window.visualViewport.height > 0
+      ) {
+        return window.visualViewport.height;
+      }
+      if (typeof window.innerHeight === "number" && isFinite(window.innerHeight) && window.innerHeight > 0) {
+        return window.innerHeight;
+      }
+      if (
+        document.documentElement &&
+        typeof document.documentElement.clientHeight === "number" &&
+        isFinite(document.documentElement.clientHeight) &&
+        document.documentElement.clientHeight > 0
+      ) {
+        return document.documentElement.clientHeight;
+      }
+      if (
+        document.body &&
+        typeof document.body.clientHeight === "number" &&
+        isFinite(document.body.clientHeight) &&
+        document.body.clientHeight > 0
+      ) {
+        return document.body.clientHeight;
+      }
+      return 0;
+    }
+
+    function readCssSafeAreaValue(cssValue) {
+      var root = document.body || document.documentElement;
+      if (!root || typeof window.getComputedStyle !== "function") {
+        return 0;
+      }
+
+      var probe = document.createElement("div");
+      probe.style.position = "fixed";
+      probe.style.top = "0";
+      probe.style.left = "0";
+      probe.style.width = "0";
+      probe.style.height = "0";
+      probe.style.visibility = "hidden";
+      probe.style.pointerEvents = "none";
+      probe.style.paddingTop = cssValue;
+
+      root.appendChild(probe);
+      try {
+        return clampPixels(window.getComputedStyle(probe).paddingTop);
+      } finally {
+        if (typeof probe.remove === "function") {
+          probe.remove();
+        } else if (probe.parentNode) {
+          probe.parentNode.removeChild(probe);
+        }
+      }
+    }
+
+    function cssSafeAreaTopPixels() {
+      var envPixels = readCssSafeAreaValue("env(safe-area-inset-top)");
+      if (envPixels > 0) {
+        return envPixels;
+      }
+      return readCssSafeAreaValue("constant(safe-area-inset-top)");
+    }
+
+    function devicePixelRatio() {
+      if (typeof window.devicePixelRatio !== "number" || !isFinite(window.devicePixelRatio) || window.devicePixelRatio <= 0) {
+        return 1;
+      }
+      return window.devicePixelRatio;
+    }
+
+    function roughlyEqualPixels(a, b) {
+      return Math.abs(a - b) <= 2;
+    }
+
+    function normalizePixels(value) {
+      var pixels = clampPixels(value);
+      var cssPixels = cssSafeAreaTopPixels();
+      if (pixels <= 0) {
+        return cssPixels;
+      }
+
+      var dpr = devicePixelRatio();
+      if (cssPixels > 0 && dpr > 1 && roughlyEqualPixels(pixels / dpr, cssPixels)) {
+        return cssPixels;
+      }
+
+      return pixels;
+    }
+
+    function pixelsToPercent(pixels) {
+      var h = viewportHeight();
+      if (h <= 0) {
+        return 0;
+      }
+      return normalizePercent((pixels / h) * 100) || 0;
+    }
+
+    function cssSafeAreaTopPercent() {
+      return pixelsToPercent(cssSafeAreaTopPixels());
+    }
+
+    function resolvePercent(value) {
+      var percent = normalizePercent(value);
+      if (percent == null) {
+        return null;
+      }
+      return percent > 0 ? percent : cssSafeAreaTopPercent();
+    }
+
+    function resolvePixels(value) {
+      var numeric = toFiniteNumber(value);
+      if (numeric == null) {
+        return null;
+      }
+      return pixelsToPercent(normalizePixels(numeric));
+    }
+
     if (typeof window.getSafeAreaTopPercent === "function") {
       try {
-        var p = window.getSafeAreaTopPercent();
-        if (typeof p === "number" && isFinite(p)) {
-          pct = Math.min(100, Math.max(0, p));
+        var percent = resolvePercent(window.getSafeAreaTopPercent());
+        if (percent != null) {
+          return percent;
         }
       } catch (e) {
         console.error("[OasizSDK] getSafeAreaTopPercent failed:", e);
       }
-      return pct;
     }
-    if (
-      typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ !== "undefined" &&
-      typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ === "number" &&
-      isFinite(window.__OASIZ_SAFE_AREA_TOP_PERCENT__)
-    ) {
-      return Math.min(100, Math.max(0, window.__OASIZ_SAFE_AREA_TOP_PERCENT__));
+    if (typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ !== "undefined") {
+      var globalPercent = resolvePercent(window.__OASIZ_SAFE_AREA_TOP_PERCENT__);
+      if (globalPercent != null) {
+        return globalPercent;
+      }
     }
-    var topPx = 0;
     if (typeof window.getSafeAreaTop === "function") {
       try {
-        var v = window.getSafeAreaTop();
-        if (typeof v === "number" && isFinite(v)) {
-          topPx = Math.max(0, v);
+        var pixelPercent = resolvePixels(window.getSafeAreaTop());
+        if (pixelPercent != null) {
+          return pixelPercent;
         }
       } catch (e) {
         console.error("[OasizSDK] getSafeAreaTop failed:", e);
       }
-    } else if (
-      typeof window.__OASIZ_SAFE_AREA_TOP__ !== "undefined" &&
-      typeof window.__OASIZ_SAFE_AREA_TOP__ === "number" &&
-      isFinite(window.__OASIZ_SAFE_AREA_TOP__)
-    ) {
-      topPx = Math.max(0, window.__OASIZ_SAFE_AREA_TOP__);
-    } else {
-      console.warn("[OasizSDK] getSafeAreaTop bridge is unavailable.");
-      return 0;
     }
-    var h = window.innerHeight;
-    if (typeof h !== "number" || !isFinite(h) || h <= 0) {
-      return 0;
+    if (typeof window.__OASIZ_SAFE_AREA_TOP__ !== "undefined") {
+      var globalPixelPercent = resolvePixels(window.__OASIZ_SAFE_AREA_TOP__);
+      if (globalPixelPercent != null) {
+        return globalPixelPercent;
+      }
     }
-    return Math.min(100, Math.max(0, (topPx / h) * 100));
+
+    var cssPercent = cssSafeAreaTopPercent();
+    if (cssPercent > 0) {
+      return cssPercent;
+    }
+
+    console.warn("[OasizSDK] getSafeAreaTop bridge is unavailable.");
+    return 0;
   },
 
   OasizSetLeaderboardVisible: function (visible) {

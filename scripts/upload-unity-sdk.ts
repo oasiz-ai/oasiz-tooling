@@ -21,9 +21,6 @@
  *   R2_CUSTOM_DOMAIN       e.g. https://assets.oasiz.ai
  */
 
-import { config } from "dotenv";
-config();
-
 import {
   existsSync,
   readFileSync,
@@ -34,13 +31,32 @@ import {
   copyFileSync,
   rmSync,
 } from "node:fs";
-import { resolve, join, relative, extname, basename, dirname } from "node:path";
+import { resolve, join, relative, extname, basename } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { config } from "dotenv";
 
 const R2_KEY = "sdk/unity/OasizSDK.unitypackage";
 const ASSET_ROOT = "Assets/OasizSDK";
+
+function loadEnvFiles(): void {
+  const candidates = [
+    resolve(".env"),
+    resolve("../oasiz/backend/.env"),
+    resolve("../oasiz-game-studio/.env"),
+    process.env.HOME ? join(process.env.HOME, "Desktop/Oasiz/oasiz/backend/.env") : "",
+  ];
+  const seen = new Set<string>();
+
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate) || !existsSync(candidate)) continue;
+    seen.add(candidate);
+    config({ path: candidate });
+  }
+}
+
+loadEnvFiles();
 
 // ---------- R2 client ----------
 
@@ -224,8 +240,9 @@ async function uploadToR2(filePath: string): Promise<string> {
       Bucket: bucket,
       Key: R2_KEY,
       Body: body,
-      ContentType: "application/gzip",
-      CacheControl: "public, max-age=300",
+      ContentType: "application/octet-stream",
+      ContentDisposition: 'attachment; filename="OasizSDK.unitypackage"',
+      CacheControl: "public, max-age=3600",
     }),
   );
 

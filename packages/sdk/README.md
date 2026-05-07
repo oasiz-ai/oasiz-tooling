@@ -196,11 +196,11 @@ private onGameOver(): void {
 
 ### Layout
 
-Use the runtime safe-area value instead of hardcoded top offsets. The SDK returns the top inset as **a percentage of the viewport height (0–100)**. If the host exposes CSS pixels via `window.getSafeAreaTop()` or `window.__OASIZ_SAFE_AREA_TOP__`, the SDK converts using `window.innerHeight`. The host may instead set **`window.getSafeAreaTopPercent()`** or **`window.__OASIZ_SAFE_AREA_TOP_PERCENT__`** (0–100) and that value is used directly.
+Use the runtime safe-area value instead of hardcoded top offsets. The SDK returns the top inset as **a percentage of the active viewport height (0–100)**. If the host exposes CSS pixels via `window.getSafeAreaTop()` or `window.__OASIZ_SAFE_AREA_TOP__`, the SDK converts using `window.visualViewport.height` when available, then `window.innerHeight`, then document height. The host may instead set **`window.getSafeAreaTopPercent()`** or **`window.__OASIZ_SAFE_AREA_TOP_PERCENT__`** (0–100) and that value is used directly. When no host bridge is available, the SDK falls back to CSS `env(safe-area-inset-top)` / `constant(safe-area-inset-top)`.
 
 #### `oasiz.getSafeAreaTop(): number`
 
-Returns the top inset as a percentage of viewport height (0–100). To get pixels in JavaScript, use `(getSafeAreaTop() / 100) * window.innerHeight`. In CSS, the same value matches **`vh`** units (for example `12.5vh` for 12.5% of the viewport height). Unsupported hosts return `0`.
+Returns the top inset as a percentage of viewport height (0–100). To get pixels in JavaScript, multiply by `window.visualViewport?.height || window.innerHeight`. In CSS, the same value matches **`vh`** units (for example `12.5vh` for 12.5% of the viewport height). Unsupported hosts return `0`.
 
 ```ts
 const safeTopPct = oasiz.getSafeAreaTop();
