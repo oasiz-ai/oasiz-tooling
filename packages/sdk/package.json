@@ -1,6 +1,6 @@
 {
   "name": "@oasiz/sdk",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "description": "Typed SDK for Oasiz game platform bridge APIs.",
   "type": "module",
   "main": "./dist/index.cjs",

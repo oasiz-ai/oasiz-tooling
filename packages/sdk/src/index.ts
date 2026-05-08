@@ -15,7 +15,7 @@ import { addScore, setScore } from "./score-edit.ts";
 import { share } from "./share.ts";
 import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
-import { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
+import { getSafeAreaTop, getViewportInsets, setLeaderboardVisible } from "./layout.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
 
 export { getPlayerCharacter } from "./character.ts";
@@ -36,7 +36,12 @@ export { addScore, setScore } from "./score-edit.ts";
 export { share } from "./share.ts";
 export { flushGameState, loadGameState, saveGameState } from "./state.ts";
 export { onPause, onResume } from "./lifecycle.ts";
-export { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
+export { getSafeAreaTop, getViewportInsets, setLeaderboardVisible } from "./layout.ts";
+export type {
+  ViewportInsetEdges,
+  ViewportInsets,
+  ViewportInsetSide,
+} from "./layout.ts";
 export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
 export type { Unsubscribe } from "./lifecycle.ts";
 export type {
@@ -71,6 +76,7 @@ export const oasiz = {
   onPause,
   onResume,
   getSafeAreaTop,
+  getViewportInsets,
   setLeaderboardVisible,
   onBackButton,
   onLeaveGame,
@@ -92,5 +98,8 @@ export const oasiz = {
   },
   get safeAreaTop(): number {
     return getSafeAreaTop();
+  },
+  get viewportInsets() {
+    return getViewportInsets();
   },
 };

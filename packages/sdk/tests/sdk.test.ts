@@ -4,6 +4,7 @@ import test from "node:test";
 import { enableLogOverlay, oasiz } from "../src/index.ts";
 import {
   getSafeAreaTop,
+  getViewportInsets,
   setLeaderboardVisible,
 } from "../src/layout.ts";
 import { onPause, onResume } from "../src/lifecycle.ts";
@@ -462,6 +463,138 @@ test("getSafeAreaTop uses percent bridge when present", () => {
   assert.equal(
     withWindow({ __OASIZ_SAFE_AREA_TOP_PERCENT__: 15 }, () => getSafeAreaTop()),
     15,
+  );
+});
+
+test("getViewportInsets normalizes host pixels against the matching viewport axis", () => {
+  const insets = withWindow(
+    {
+      __OASIZ_VIEWPORT_INSETS__: {
+        top: 80,
+        right: 20,
+        bottom: 40,
+        left: 10,
+      },
+      innerHeight: 800,
+      innerWidth: 400,
+    },
+    () => getViewportInsets(),
+  );
+
+  assert.deepEqual(insets.pixels, {
+    top: 80,
+    right: 20,
+    bottom: 40,
+    left: 10,
+  });
+  assert.deepEqual(insets.percent, {
+    top: 10,
+    right: 5,
+    bottom: 5,
+    left: 2.5,
+  });
+  assert.equal(
+    withWindow(
+      {
+        __OASIZ_VIEWPORT_INSETS__: { top: 80 },
+        innerHeight: 800,
+      },
+      () => oasiz.viewportInsets.percent.top,
+    ),
+    10,
+  );
+});
+
+test("getViewportInsets accepts host percent values", () => {
+  const insets = withWindow(
+    {
+      getViewportInsetsPercent: () => ({
+        top: "10%",
+        right: 5,
+        bottom: 4,
+        left: 2,
+      }),
+      innerHeight: 800,
+      innerWidth: 400,
+    },
+    () => getViewportInsets(),
+  );
+
+  assert.deepEqual(insets.percent, {
+    top: 10,
+    right: 5,
+    bottom: 4,
+    left: 2,
+  });
+  assert.deepEqual(insets.pixels, {
+    top: 80,
+    right: 20,
+    bottom: 32,
+    left: 8,
+  });
+});
+
+test("getViewportInsets falls back to CSS safe-area env for every side", () => {
+  const probe = {
+    style: {} as Record<string, string>,
+    remove() {},
+  };
+  const fakeDocument = {
+    body: {
+      appendChild() {},
+      clientHeight: 0,
+      clientWidth: 0,
+    },
+    documentElement: { clientHeight: 0, clientWidth: 0 },
+    createElement: () => probe,
+  };
+
+  const cssPixels: Record<string, string> = {
+    top: "40px",
+    right: "12px",
+    bottom: "20px",
+    left: "8px",
+  };
+  const insets = withWindow(
+    {
+      document: fakeDocument,
+      getComputedStyle: () => {
+        const side =
+          probe.style.paddingTop.match(/safe-area-inset-(top|right|bottom|left)/)?.[1] ??
+          "top";
+        return { paddingTop: cssPixels[side] };
+      },
+      innerHeight: 800,
+      innerWidth: 400,
+    },
+    () => getViewportInsets(),
+  );
+
+  assert.deepEqual(insets.pixels, {
+    top: 40,
+    right: 12,
+    bottom: 20,
+    left: 8,
+  });
+  assert.deepEqual(insets.percent, {
+    top: 5,
+    right: 3,
+    bottom: 2.5,
+    left: 2,
+  });
+});
+
+test("getSafeAreaTop uses the viewport inset top value", () => {
+  assert.equal(
+    withWindow(
+      {
+        __OASIZ_VIEWPORT_INSETS__: { top: 80 },
+        getSafeAreaTop: () => 999,
+        innerHeight: 800,
+      },
+      () => getSafeAreaTop(),
+    ),
+    10,
   );
 });
 

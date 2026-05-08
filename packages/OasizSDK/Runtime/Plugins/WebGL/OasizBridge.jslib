@@ -140,6 +140,15 @@ var OasizBridge = {
   // ---------------------------------------------------------------------------
 
   OasizGetSafeAreaTop: function () {
+    return OasizBridge.OasizGetViewportInset("top");
+  },
+
+  OasizGetViewportInset: function (sidePtr) {
+    var side = typeof sidePtr === "string" ? sidePtr : sidePtr ? UTF8ToString(sidePtr) : "";
+    if (side !== "top" && side !== "right" && side !== "bottom" && side !== "left") {
+      return 0;
+    }
+
     function toFiniteNumber(value) {
       if (typeof value === "number" && isFinite(value)) {
         return value;
@@ -155,7 +164,7 @@ var OasizBridge = {
 
     function clampPixels(value) {
       var numeric = toFiniteNumber(value);
-      return numeric == null ? 0 : Math.max(0, numeric);
+      return numeric == null ? null : Math.max(0, numeric);
     }
 
     function normalizePercent(value) {
@@ -163,34 +172,43 @@ var OasizBridge = {
       return numeric == null ? null : Math.min(100, Math.max(0, numeric));
     }
 
-    function viewportHeight() {
+    function sideSuffix() {
+      if (side === "top") return "Top";
+      if (side === "right") return "Right";
+      if (side === "bottom") return "Bottom";
+      return "Left";
+    }
+
+    function viewportSize() {
+      var vertical = side === "top" || side === "bottom";
       if (
         window.visualViewport &&
-        typeof window.visualViewport.height === "number" &&
-        isFinite(window.visualViewport.height) &&
-        window.visualViewport.height > 0
+        typeof (vertical ? window.visualViewport.height : window.visualViewport.width) === "number" &&
+        isFinite(vertical ? window.visualViewport.height : window.visualViewport.width) &&
+        (vertical ? window.visualViewport.height : window.visualViewport.width) > 0
       ) {
-        return window.visualViewport.height;
+        return vertical ? window.visualViewport.height : window.visualViewport.width;
       }
-      if (typeof window.innerHeight === "number" && isFinite(window.innerHeight) && window.innerHeight > 0) {
-        return window.innerHeight;
+
+      var innerSize = vertical ? window.innerHeight : window.innerWidth;
+      if (typeof innerSize === "number" && isFinite(innerSize) && innerSize > 0) {
+        return innerSize;
       }
-      if (
-        document.documentElement &&
-        typeof document.documentElement.clientHeight === "number" &&
-        isFinite(document.documentElement.clientHeight) &&
-        document.documentElement.clientHeight > 0
-      ) {
-        return document.documentElement.clientHeight;
+
+      if (document.documentElement) {
+        var documentSize = vertical ? document.documentElement.clientHeight : document.documentElement.clientWidth;
+        if (typeof documentSize === "number" && isFinite(documentSize) && documentSize > 0) {
+          return documentSize;
+        }
       }
-      if (
-        document.body &&
-        typeof document.body.clientHeight === "number" &&
-        isFinite(document.body.clientHeight) &&
-        document.body.clientHeight > 0
-      ) {
-        return document.body.clientHeight;
+
+      if (document.body) {
+        var bodySize = vertical ? document.body.clientHeight : document.body.clientWidth;
+        if (typeof bodySize === "number" && isFinite(bodySize) && bodySize > 0) {
+          return bodySize;
+        }
       }
+
       return 0;
     }
 
@@ -212,7 +230,7 @@ var OasizBridge = {
 
       root.appendChild(probe);
       try {
-        return clampPixels(window.getComputedStyle(probe).paddingTop);
+        return clampPixels(window.getComputedStyle(probe).paddingTop) || 0;
       } finally {
         if (typeof probe.remove === "function") {
           probe.remove();
@@ -222,12 +240,12 @@ var OasizBridge = {
       }
     }
 
-    function cssSafeAreaTopPixels() {
-      var envPixels = readCssSafeAreaValue("env(safe-area-inset-top)");
+    function cssSafeAreaPixels() {
+      var envPixels = readCssSafeAreaValue("env(safe-area-inset-" + side + ")");
       if (envPixels > 0) {
         return envPixels;
       }
-      return readCssSafeAreaValue("constant(safe-area-inset-top)");
+      return readCssSafeAreaValue("constant(safe-area-inset-" + side + ")");
     }
 
     function devicePixelRatio() {
@@ -243,7 +261,11 @@ var OasizBridge = {
 
     function normalizePixels(value) {
       var pixels = clampPixels(value);
-      var cssPixels = cssSafeAreaTopPixels();
+      if (pixels == null) {
+        return null;
+      }
+
+      var cssPixels = cssSafeAreaPixels();
       if (pixels <= 0) {
         return cssPixels;
       }
@@ -257,73 +279,101 @@ var OasizBridge = {
     }
 
     function pixelsToPercent(pixels) {
-      var h = viewportHeight();
-      if (h <= 0) {
+      var size = viewportSize();
+      if (size <= 0) {
         return 0;
       }
-      return normalizePercent((pixels / h) * 100) || 0;
+      return normalizePercent((pixels / size) * 100) || 0;
     }
 
-    function cssSafeAreaTopPercent() {
-      return pixelsToPercent(cssSafeAreaTopPixels());
+    function cssSafeAreaPercent() {
+      return pixelsToPercent(cssSafeAreaPixels());
     }
 
-    function resolvePercent(value) {
-      var percent = normalizePercent(value);
-      if (percent == null) {
-        return null;
+    function percentToPixels(percent) {
+      var size = viewportSize();
+      if (size <= 0) {
+        return 0;
       }
-      return percent > 0 ? percent : cssSafeAreaTopPercent();
+      return (percent / 100) * size;
     }
 
-    function resolvePixels(value) {
-      var numeric = toFiniteNumber(value);
-      if (numeric == null) {
-        return null;
+    function readObjectValue(value, group) {
+      if (!value || typeof value !== "object") {
+        return undefined;
       }
-      return pixelsToPercent(normalizePixels(numeric));
+      if (group) {
+        return value[group] && typeof value[group] === "object" ? value[group][side] : undefined;
+      }
+      return value[side];
     }
 
-    if (typeof window.getSafeAreaTopPercent === "function") {
+    function callFunction(name) {
+      if (typeof window[name] !== "function") {
+        return undefined;
+      }
       try {
-        var percent = resolvePercent(window.getSafeAreaTopPercent());
-        if (percent != null) {
-          return percent;
-        }
+        return window[name]();
       } catch (e) {
-        console.error("[OasizSDK] getSafeAreaTopPercent failed:", e);
-      }
-    }
-    if (typeof window.__OASIZ_SAFE_AREA_TOP_PERCENT__ !== "undefined") {
-      var globalPercent = resolvePercent(window.__OASIZ_SAFE_AREA_TOP_PERCENT__);
-      if (globalPercent != null) {
-        return globalPercent;
-      }
-    }
-    if (typeof window.getSafeAreaTop === "function") {
-      try {
-        var pixelPercent = resolvePixels(window.getSafeAreaTop());
-        if (pixelPercent != null) {
-          return pixelPercent;
-        }
-      } catch (e) {
-        console.error("[OasizSDK] getSafeAreaTop failed:", e);
-      }
-    }
-    if (typeof window.__OASIZ_SAFE_AREA_TOP__ !== "undefined") {
-      var globalPixelPercent = resolvePixels(window.__OASIZ_SAFE_AREA_TOP__);
-      if (globalPixelPercent != null) {
-        return globalPixelPercent;
+        console.error("[OasizSDK] " + name + " failed:", e);
+        return undefined;
       }
     }
 
-    var cssPercent = cssSafeAreaTopPercent();
+    function firstDefined(values) {
+      for (var i = 0; i < values.length; i += 1) {
+        if (typeof values[i] !== "undefined") {
+          return values[i];
+        }
+      }
+      return undefined;
+    }
+
+    function percentCandidate() {
+      var methodPercent = callFunction("getViewportInsetsPercent");
+      var methodPixels = callFunction("getViewportInsets");
+      var suffix = sideSuffix();
+      return firstDefined([
+        readObjectValue(methodPercent, "percent"),
+        readObjectValue(methodPercent),
+        readObjectValue(window.__OASIZ_VIEWPORT_INSETS_PERCENT__, "percent"),
+        readObjectValue(window.__OASIZ_VIEWPORT_INSETS_PERCENT__),
+        readObjectValue(methodPixels, "percent"),
+        readObjectValue(window.__OASIZ_VIEWPORT_INSETS__, "percent"),
+        callFunction("getSafeArea" + suffix + "Percent"),
+        window["__OASIZ_SAFE_AREA_" + side.toUpperCase() + "_PERCENT__"],
+      ]);
+    }
+
+    function pixelCandidate() {
+      var methodPixels = callFunction("getViewportInsets");
+      var suffix = sideSuffix();
+      return firstDefined([
+        readObjectValue(methodPixels, "pixels"),
+        readObjectValue(methodPixels),
+        readObjectValue(window.__OASIZ_VIEWPORT_INSETS__, "pixels"),
+        readObjectValue(window.__OASIZ_VIEWPORT_INSETS__),
+        callFunction("getSafeArea" + suffix),
+        window["__OASIZ_SAFE_AREA_" + side.toUpperCase() + "__"],
+      ]);
+    }
+
+    var percent = normalizePercent(percentCandidate());
+    if (percent != null) {
+      return percent > 0 ? percent : cssSafeAreaPercent();
+    }
+
+    var pixels = normalizePixels(pixelCandidate());
+    if (pixels != null) {
+      return pixelsToPercent(pixels);
+    }
+
+    var cssPercent = cssSafeAreaPercent();
     if (cssPercent > 0) {
       return cssPercent;
     }
 
-    console.warn("[OasizSDK] getSafeAreaTop bridge is unavailable.");
-    return 0;
+    return pixelsToPercent(percentToPixels(0));
   },
 
   OasizSetLeaderboardVisible: function (visible) {

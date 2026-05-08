@@ -9,6 +9,27 @@ using UnityEngine.Scripting;
 namespace Oasiz
 {
   /// <summary>
+  /// Effective viewport insets that game UI should avoid.
+  /// Values are normalized percentages (0–100) of the matching viewport axis:
+  /// top/bottom use viewport height, left/right use viewport width.
+  /// </summary>
+  public struct ViewportInsets
+  {
+    public float Top;
+    public float Right;
+    public float Bottom;
+    public float Left;
+
+    public ViewportInsets(float top, float right, float bottom, float left)
+    {
+      Top = top;
+      Right = right;
+      Bottom = bottom;
+      Left = left;
+    }
+  }
+
+  /// <summary>
   /// Oasiz platform SDK for Unity WebGL games.
   ///
   /// Add one instance of this component to a persistent GameObject early in your
@@ -19,6 +40,7 @@ namespace Oasiz
   ///   OasizSDK.TriggerHaptic(HapticType.Medium);
   ///   OasizSDK.OpenInviteModal();
   ///   OasizSDK.EnableLogOverlay(new LogOverlayOptions { Collapsed = true });
+  ///   ViewportInsets insets = OasizSDK.GetViewportInsets();
   ///   float safeTop = OasizSDK.GetSafeAreaTop();
   ///   OasizSDK.SetLeaderboardVisible(false);
   ///   OasizSDK.Share(new ShareRequest { Text = "Beat this!", Score = 42 });
@@ -434,17 +456,33 @@ namespace Oasiz
     // -------------------------------------------------------------------------
 
     /// <summary>
-    /// Top safe-area inset as a percentage of the WebGL viewport height (0–100).
-    /// Convert to pixels with <c>GetSafeAreaTop() / 100f * Screen.height</c>.
-    /// The host may supply CSS pixels (normalized in the bridge), physical pixels
-    /// that match CSS safe-area env values, or
-    /// <c>getSafeAreaTopPercent</c> / <c>__OASIZ_SAFE_AREA_TOP_PERCENT__</c>.
-    /// Returns 0 when the host does not inject a value.
+    /// Effective viewport insets that game UI should avoid.
+    /// The top inset preserves the existing Oasiz game-safe top behavior,
+    /// including host chrome / invite / leaderboard clearance when present.
+    /// Left, right, and bottom use device safe-area insets today.
+    /// Values are percentages (0–100) of the matching viewport axis.
+    /// </summary>
+    public static ViewportInsets GetViewportInsets()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+      return new ViewportInsets(
+        OasizGetViewportInset("top"),
+        OasizGetViewportInset("right"),
+        OasizGetViewportInset("bottom"),
+        OasizGetViewportInset("left")
+      );
+#else
+      return new ViewportInsets(0f, 0f, 0f, 0f);
+#endif
+    }
+
+    /// <summary>
+    /// Legacy alias for <c>GetViewportInsets().Top</c>.
     /// </summary>
     public static float GetSafeAreaTop()
     {
 #if UNITY_WEBGL && !UNITY_EDITOR
-      return OasizGetSafeAreaTop();
+      return OasizGetViewportInset("top");
 #else
       return 0f;
 #endif
@@ -924,7 +962,7 @@ namespace Oasiz
     [DllImport("__Internal")] private static extern string OasizLoadGameState();
     [DllImport("__Internal")] private static extern void OasizSaveGameState(string stateJson);
     [DllImport("__Internal")] private static extern void OasizFlushGameState();
-    [DllImport("__Internal")] private static extern float OasizGetSafeAreaTop();
+    [DllImport("__Internal")] private static extern float OasizGetViewportInset(string side);
     [DllImport("__Internal")] private static extern void OasizSetLeaderboardVisible(int visible);
     [DllImport("__Internal")] private static extern void OasizLeaveGame();
     [DllImport("__Internal")] private static extern void OasizSetBackOverride(int active);

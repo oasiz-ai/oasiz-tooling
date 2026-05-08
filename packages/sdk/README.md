@@ -196,11 +196,32 @@ private onGameOver(): void {
 
 ### Layout
 
-Use the runtime safe-area value instead of hardcoded top offsets. The SDK returns the top inset as **a percentage of the active viewport height (0–100)**. If the host exposes CSS pixels via `window.getSafeAreaTop()` or `window.__OASIZ_SAFE_AREA_TOP__`, the SDK converts using `window.visualViewport.height` when available, then `window.innerHeight`, then document height. The host may instead set **`window.getSafeAreaTopPercent()`** or **`window.__OASIZ_SAFE_AREA_TOP_PERCENT__`** (0–100) and that value is used directly. When no host bridge is available, the SDK falls back to CSS `env(safe-area-inset-top)` / `constant(safe-area-inset-top)`.
+Use runtime viewport insets instead of direct CSS `env(safe-area-inset-*)` reads or hardcoded offsets. The SDK resolves host-provided Oasiz values first, then browser CSS `env(safe-area-inset-*)`, then legacy `constant(safe-area-inset-*)`, and finally `0`.
+
+The top inset preserves the existing Oasiz game-safe top behavior: host chrome, invite UI, and leaderboard clearance can contribute to it. Left, right, and bottom are device safe-area insets today and may include future host UI obstructions.
+
+#### `oasiz.getViewportInsets(): ViewportInsets`
+
+Returns effective viewport insets in both CSS pixels and normalized percentages:
+
+```ts
+const insets = oasiz.getViewportInsets();
+hud.style.paddingTop = `${insets.pixels.top}px`;
+hud.style.paddingRight = `${insets.pixels.right}px`;
+hud.style.paddingBottom = `${insets.pixels.bottom}px`;
+hud.style.paddingLeft = `${insets.pixels.left}px`;
+```
+
+Percentages use the matching active viewport axis:
+
+- `top` / `bottom` are percentages of viewport height
+- `left` / `right` are percentages of viewport width
+
+Hosts may expose pixels via `window.getViewportInsets()` or `window.__OASIZ_VIEWPORT_INSETS__`, for example `{ top, right, bottom, left }` or `{ pixels: { top, right, bottom, left } }`. Hosts may expose percentages via `window.getViewportInsetsPercent()`, `window.__OASIZ_VIEWPORT_INSETS_PERCENT__`, or a `percent` object. Per-side globals such as `window.__OASIZ_SAFE_AREA_BOTTOM__` are also supported.
 
 #### `oasiz.getSafeAreaTop(): number`
 
-Returns the top inset as a percentage of viewport height (0–100). To get pixels in JavaScript, multiply by `window.visualViewport?.height || window.innerHeight`. In CSS, the same value matches **`vh`** units (for example `12.5vh` for 12.5% of the viewport height). Unsupported hosts return `0`.
+Legacy alias for `oasiz.getViewportInsets().percent.top`. Returns the top inset as a percentage of viewport height (0–100). To get pixels in JavaScript, prefer `oasiz.getViewportInsets().pixels.top`. In CSS, the percent value matches **`vh`** units (for example `12.5vh` for 12.5% of the viewport height). Unsupported hosts return `0`.
 
 ```ts
 const safeTopPct = oasiz.getSafeAreaTop();
@@ -210,6 +231,10 @@ document.documentElement.style.setProperty("--safe-top", `${safeTopPct}vh`);
 #### `oasiz.safeAreaTop`
 
 Getter alias for `getSafeAreaTop()`.
+
+#### `oasiz.viewportInsets`
+
+Getter alias for `getViewportInsets()`.
 
 Recommended CSS pattern:
 
@@ -397,6 +422,7 @@ import {
   openInviteModal,
   enableLogOverlay,
   getSafeAreaTop,
+  getViewportInsets,
   setLeaderboardVisible,
   onPause,
   onResume,
@@ -501,7 +527,8 @@ public class GameManager : MonoBehaviour
 | `oasiz.loadGameState()` | `OasizSDK.LoadGameState()` → `Dictionary<string, object>` |
 | `oasiz.saveGameState(obj)` | `OasizSDK.SaveGameState(Dictionary<string, object>)` |
 | `oasiz.flushGameState()` | `OasizSDK.FlushGameState()` |
-| `oasiz.getSafeAreaTop()` / `safeAreaTop` | `OasizSDK.GetSafeAreaTop()` / `OasizSDK.SafeAreaTop` (`float`, 0–100, % of viewport height) |
+| `oasiz.getViewportInsets()` / `viewportInsets` | `OasizSDK.GetViewportInsets()` (`ViewportInsets`, each side 0–100, % of matching viewport axis) |
+| `oasiz.getSafeAreaTop()` / `safeAreaTop` | `OasizSDK.GetSafeAreaTop()` / `OasizSDK.SafeAreaTop` (`float`, 0–100, % of viewport height; legacy alias for top viewport inset) |
 | `oasiz.setLeaderboardVisible(v)` | `OasizSDK.SetLeaderboardVisible(bool)` |
 | `oasiz.onPause` / `onResume` | `OasizSDK.OnPause` / `OnResume` static events |
 | `oasiz.onBackButton` | `OasizSDK.OnBackButton` or `SubscribeBackButton(Action)` (reference-counts `__oasizSetBackOverride`) |
