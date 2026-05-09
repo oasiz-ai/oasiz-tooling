@@ -51,6 +51,8 @@ Useful upload flags:
 - `--withlog` injects a preboot log overlay into the uploaded HTML for Unity and non-Unity games without modifying build files on disk.
 - `horizontal` or `vertical` overrides `publish.json` orientation for that upload.
 
+Upload sends runtime manifest data when `publish.json` includes a `runtimeManifest` object. Unity WebGL uploads now also send a default web runtime manifest with `engine: "unity-webgl"` so mobile/app clients can route them through the correct engine lane. Uploaded assets are finalized with manifest metadata such as R2 key, content type, role, size, hash, and content encoding.
+
 Unity WebGL exports are detected under `Unity/<game>/Build/index.html`; the upload includes Build assets, preserves the OasizDefault template marker behavior, and rewrites Unity asset paths for CDN delivery when needed.
 
 ## Game Servers

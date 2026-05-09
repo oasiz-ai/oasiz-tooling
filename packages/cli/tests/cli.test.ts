@@ -58,6 +58,15 @@ async function writeViteFixture(root: string, name = "kite"): Promise<string> {
         description: "asset-heavy test",
         category: "arcade",
         gameId: "game-existing",
+        runtimeManifest: {
+          artifactSchemaVersion: 1,
+          runtime: "web",
+          engine: "phaser",
+          entry: "index.html",
+          orientation: "landscape",
+          sdkVersion: "fixture",
+          capabilities: ["score", "saveState"],
+        },
         verticalOnly: false,
       },
       null,
@@ -526,6 +535,7 @@ test("upload dry-run reports presigned CDN upload shape", async () => {
     assert.match(output, /Asset Transport: CDN assets via presigned R2 upload/);
     assert.match(output, /Has Thumbnail: true/);
     assert.match(output, /Vertical Only: false/);
+    assert.match(output, /Runtime Manifest: web\/phaser/);
     assert.match(output, /Game ID: game-existing/);
     assert.match(output, /Bundle Size:/);
   });
@@ -612,9 +622,26 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
     assert.ok(calls.find((call) => call.url.endsWith("/sync-html") && call.method === "POST"));
     assert.ok(calls.find((call) => call.url.endsWith("/thumbnail") && call.method === "POST"));
 
+    const initCall = calls.find((call) => call.url.endsWith("/init"));
+    assert.ok(initCall);
+    const initBody = JSON.parse(initCall.body) as {
+      runtimeManifest?: { runtime?: string; engine?: string; orientation?: string };
+    };
+    assert.equal(initBody.runtimeManifest?.runtime, "web");
+    assert.equal(initBody.runtimeManifest?.engine, "phaser");
+    assert.equal(initBody.runtimeManifest?.orientation, "landscape");
+
     const presignCall = calls.find((call) => call.url.endsWith("/presign"));
     assert.ok(presignCall);
-    const presignBody = JSON.parse(presignCall.body) as { assets: Array<{ path: string; contentType: string }> };
+    const presignBody = JSON.parse(presignCall.body) as {
+      assets: Array<{
+        path: string;
+        contentType: string;
+        role?: string;
+        sha256?: string;
+        sizeBytes?: number;
+      }>;
+    };
     assert.deepEqual(
       presignBody.assets.map((asset) => [asset.path, asset.contentType]).sort(),
       [
@@ -623,16 +650,42 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
         ["images/pic.png", "image/png"],
       ],
     );
+    assert.ok(presignBody.assets.every((asset) => asset.sha256 && asset.sizeBytes));
 
     const syncCall = calls.find((call) => call.url.endsWith("/sync-html"));
     assert.ok(syncCall);
-    const syncBody = JSON.parse(syncCall.body) as { allAssetPaths: string[]; assets?: unknown };
+    const syncBody = JSON.parse(syncCall.body) as {
+      allAssetPaths: string[];
+      assetFiles?: Array<{
+        path: string;
+        r2Key: string;
+        role?: string;
+        sha256?: string;
+        sizeBytes?: number;
+      }>;
+      assets?: unknown;
+      runtimeManifest?: { runtime?: string; engine?: string };
+    };
     assert.equal("assets" in syncBody, false);
     assert.deepEqual(syncBody.allAssetPaths.sort(), ["assets/config.json", "assets/index.js", "images/pic.png"]);
+    assert.equal(syncBody.runtimeManifest?.engine, "phaser");
+    assert.deepEqual(
+      syncBody.assetFiles?.map((asset) => [asset.path, asset.r2Key, asset.role]).sort(),
+      [
+        ["assets/config.json", "game-assets/game-123/assets/config.json", "asset"],
+        ["assets/index.js", "game-assets/game-123/assets/index.js", "asset"],
+        ["images/pic.png", "game-assets/game-123/images/pic.png", "asset"],
+      ],
+    );
+    assert.ok(syncBody.assetFiles?.every((asset) => asset.sha256 && asset.sizeBytes));
 
     const jsonPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/config.json")));
     assert.ok(jsonPut);
     assert.match(jsonPut.body, /https:\/\/cdn\.test\/game-assets\/game-123\/images\/pic\.png/);
+
+    const rewrittenConfig = Buffer.from(String(jsonPut.body));
+    const configAsset = syncBody.assetFiles?.find((asset) => asset.path === "assets/config.json");
+    assert.equal(configAsset?.sha256, createHash("sha256").update(rewrittenConfig).digest("hex"));
 
     const jsPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/index.js")));
     assert.ok(jsPut);
@@ -685,6 +738,7 @@ document.body.appendChild(script);
     assert.match(output, /Detected OasizDefault template marker/);
     assert.match(output, /Preserving custom template loader\/fullscreen logic/);
     assert.match(output, /Type: Unity WebGL/);
+    assert.match(output, /Runtime Manifest: web\/unity-webgl/);
     assert.match(output, /Assets: 2 files/);
     assert.match(output, /Game ID: unity-game/);
 

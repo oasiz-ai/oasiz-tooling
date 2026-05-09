@@ -18,6 +18,7 @@ export interface PublishConfig {
   gameId?: string;
   isMultiplayer?: boolean;
   maxPlayers?: number;
+  runtimeManifest?: Record<string, unknown>;
   verticalOnly?: boolean;
 }
 
@@ -107,6 +108,12 @@ export async function readPublishConfig(gamePath: string): Promise<PublishConfig
     gameId: parsed.gameId,
     isMultiplayer: parsed.isMultiplayer,
     maxPlayers: parsed.maxPlayers,
+    runtimeManifest:
+      parsed.runtimeManifest &&
+      typeof parsed.runtimeManifest === "object" &&
+      !Array.isArray(parsed.runtimeManifest)
+        ? parsed.runtimeManifest
+        : undefined,
     verticalOnly: parsed.verticalOnly,
   };
 }

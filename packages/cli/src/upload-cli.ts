@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
@@ -16,6 +17,37 @@ interface AssetEntry {
   path: string;
   buffer: Buffer;
   contentType: string;
+  contentEncoding?: "br" | "gzip";
+  role?: RuntimeAssetFileRole;
+}
+
+type RuntimeAssetFileRole =
+  | "entry"
+  | "asset"
+  | "framework"
+  | "loader"
+  | "manifest"
+  | "wasm"
+  | "data"
+  | "symbols";
+
+interface RuntimeAssetFilePayload {
+  path: string;
+  r2Key: string;
+  contentType: string;
+  contentEncoding?: "br" | "gzip";
+  role?: RuntimeAssetFileRole;
+  sha256?: string;
+  sizeBytes?: number;
+}
+
+type UploadRuntimeManifest = Record<string, unknown> & {
+  artifactSchemaVersion?: 1;
+  runtime?: string;
+  engine?: string;
+  entry?: string;
+  orientation?: string;
+  sdkVersion?: string;
 }
 
 interface UploadPayload {
@@ -31,6 +63,7 @@ interface UploadPayload {
   thumbnailBase64?: string;
   bundleHtml: string;
   assets?: AssetEntry[];
+  runtimeManifest?: UploadRuntimeManifest;
 }
 
 function loadEnvSync(): void {
@@ -159,7 +192,8 @@ function getAllFiles(dirPath: string, allFiles: string[] = []): string[] {
 }
 
 function getMimeType(filePath: string): string {
-  const ext = extname(filePath).toLowerCase();
+  const pathWithoutEncoding = filePath.replace(/\.(br|gz)$/i, "");
+  const ext = extname(pathWithoutEncoding).toLowerCase();
   const mimeTypes: Record<string, string> = {
     ".js": "application/javascript",
     ".mjs": "application/javascript",
@@ -182,6 +216,79 @@ function getMimeType(filePath: string): string {
     ".ttf": "font/ttf",
   };
   return mimeTypes[ext] || "application/octet-stream";
+}
+
+function getContentEncoding(filePath: string): "br" | "gzip" | undefined {
+  if (/\.br$/i.test(filePath)) return "br";
+  if (/\.gz$/i.test(filePath)) return "gzip";
+  return undefined;
+}
+
+function inferRuntimeAssetFileRole(path: string): RuntimeAssetFileRole {
+  if (path === "index.html") return "entry";
+  if (/\.loader\.js(?:\.(?:br|gz))?$/i.test(path)) return "loader";
+  if (/\.framework\.js(?:\.(?:br|gz))?$/i.test(path)) return "framework";
+  if (/\.wasm(?:\.(?:br|gz))?$/i.test(path)) return "wasm";
+  if (/\.data(?:\.(?:br|gz))?$/i.test(path)) return "data";
+  if (/\.symbols\.json(?:\.(?:br|gz))?$/i.test(path)) return "symbols";
+  if (/(?:^|\/)manifest\.(?:json|webmanifest)$/i.test(path)) return "manifest";
+  return "asset";
+}
+
+function sha256Hex(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function buildUploadedGameAssetR2Key(params: {
+  bundleVersion?: string | null;
+  gameId: string;
+  path: string;
+}): string {
+  if (params.bundleVersion) {
+    return `game-bundles/${params.gameId}/${params.bundleVersion}/${params.path}`;
+  }
+  return `game-assets/${params.gameId}/${params.path}`;
+}
+
+function getRuntimeOrientation(verticalOnly: boolean | undefined): "portrait" | "landscape" | "any" {
+  if (verticalOnly === true) return "portrait";
+  if (verticalOnly === false) return "landscape";
+  return "any";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildUploadRuntimeManifest(params: {
+  isUnity: boolean;
+  publishConfig: PublishConfig;
+  verticalOnly: boolean | undefined;
+}): UploadRuntimeManifest | undefined {
+  if (isRecord(params.publishConfig.runtimeManifest)) {
+    return {
+      ...params.publishConfig.runtimeManifest,
+      ...(params.verticalOnly !== undefined
+        ? { orientation: getRuntimeOrientation(params.verticalOnly) }
+        : {}),
+    };
+  }
+
+  if (!params.isUnity) {
+    return undefined;
+  }
+
+  return {
+    artifactSchemaVersion: 1,
+    runtime: "web",
+    engine: "unity-webgl",
+    entry: "index.html",
+    orientation: getRuntimeOrientation(params.verticalOnly),
+    sdkVersion: "oasiz-cli@1.1.5",
+    requiresWebGL: true,
+    memoryTier: "high",
+    capabilities: ["score", "saveState", "haptics", "share"],
+  };
 }
 
 function resolveGamePath(gameFolder: string): { gamePath: string; isUnity: boolean } {
@@ -232,6 +339,9 @@ async function readUploadPublishConfig(gamePath: string): Promise<PublishConfig>
     gameId: config.gameId,
     isMultiplayer: config.isMultiplayer,
     maxPlayers: config.maxPlayers,
+    runtimeManifest: isRecord(config.runtimeManifest)
+      ? config.runtimeManifest
+      : undefined,
     verticalOnly: config.verticalOnly,
   };
 }
@@ -1180,6 +1290,8 @@ async function collectAssets(gamePath: string): Promise<AssetEntry[]> {
       path: relativePath,
       buffer,
       contentType: getMimeType(filePath),
+      contentEncoding: getContentEncoding(filePath),
+      role: inferRuntimeAssetFileRole(relativePath),
     });
   }
 
@@ -1211,6 +1323,8 @@ async function collectUnityAssets(gamePath: string): Promise<AssetEntry[]> {
       path: relativePath,
       buffer,
       contentType: getMimeType(filePath),
+      contentEncoding: getContentEncoding(filePath),
+      role: inferRuntimeAssetFileRole(relativePath),
     });
   }
   return assets;
@@ -1302,12 +1416,39 @@ function uploadAuthHeaders(token: string): Record<string, string> {
   };
 }
 
-function buildCdnUrl(cdnBaseUrl: string, gameId: string, assetPath: string): string {
-  const safeKey = `game-assets/${gameId}/${assetPath}`
+function buildCdnUrl(cdnBaseUrl: string, gameId: string, assetPath: string, bundleVersion?: string | null): string {
+  const safeKey = buildUploadedGameAssetR2Key({ bundleVersion, gameId, path: assetPath })
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
   return `${cdnBaseUrl}/${safeKey}`;
+}
+
+function buildRuntimeAssetFiles(params: {
+  assets: AssetEntry[];
+  assetBuffers: Map<string, Buffer>;
+  assetR2Keys?: Record<string, string>;
+  bundleVersion?: string | null;
+  gameId: string;
+}): RuntimeAssetFilePayload[] {
+  return params.assets.map((asset) => {
+    const buffer = params.assetBuffers.get(asset.path) ?? asset.buffer;
+    return {
+      path: asset.path,
+      r2Key:
+        params.assetR2Keys?.[asset.path] ??
+        buildUploadedGameAssetR2Key({
+          bundleVersion: params.bundleVersion,
+          gameId: params.gameId,
+          path: asset.path,
+        }),
+      contentType: asset.contentType,
+      ...(asset.contentEncoding && { contentEncoding: asset.contentEncoding }),
+      ...(asset.role && { role: asset.role }),
+      sizeBytes: buffer.byteLength,
+      sha256: sha256Hex(buffer),
+    };
+  });
 }
 
 function escapeRegex(value: string): string {
@@ -1422,6 +1563,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       gameId: payload.gameId,
       isMultiplayer: payload.isMultiplayer,
       maxPlayers: payload.maxPlayers,
+      runtimeManifest: payload.runtimeManifest,
       verticalOnly: payload.verticalOnly,
     }),
   });
@@ -1442,6 +1584,8 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
 
   const assets = payload.assets ?? [];
   const allAssetPaths = assets.map((asset) => asset.path);
+  let assetFiles: RuntimeAssetFilePayload[] | undefined;
+  let bundleVersion: string | undefined;
 
   if (assets.length > 0) {
     const totalSize = assets.reduce((sum, asset) => sum + asset.buffer.length, 0);
@@ -1455,6 +1599,10 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
         assets: assets.map((asset) => ({
           path: asset.path,
           contentType: asset.contentType,
+          contentEncoding: asset.contentEncoding,
+          role: asset.role,
+          sha256: sha256Hex(asset.buffer),
+          sizeBytes: asset.buffer.byteLength,
         })),
       }),
     });
@@ -1465,21 +1613,35 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       throw new Error("Upload presign failed");
     }
 
-    const { cdnBaseUrl, urls: signedUrls } = (await presignRes.json()) as {
+    const presignResult = (await presignRes.json()) as {
+      assetR2Keys?: Record<string, string>;
+      assetUrls?: Record<string, string>;
+      bundleVersion?: string;
       cdnBaseUrl: string;
       urls: Record<string, string>;
     };
+    const { cdnBaseUrl, urls: signedUrls } = presignResult;
+    bundleVersion = presignResult.bundleVersion;
     logSuccess(`Got ${Object.keys(signedUrls).length} signed URLs (${((Date.now() - presignStart) / 1000).toFixed(1)}s)`);
 
     const cdnUrlMap: Record<string, string> = {};
     for (const assetPath of allAssetPaths) {
-      cdnUrlMap[assetPath] = buildCdnUrl(cdnBaseUrl, gameId, assetPath);
+      cdnUrlMap[assetPath] =
+        presignResult.assetUrls?.[assetPath] ??
+        buildCdnUrl(cdnBaseUrl, gameId, assetPath, bundleVersion);
     }
 
     const assetBuffers = new Map<string, Buffer>();
     for (const asset of assets) {
       assetBuffers.set(asset.path, applyJsonJsAssetUrlRewrites(asset.path, asset.buffer, cdnUrlMap));
     }
+    assetFiles = buildRuntimeAssetFiles({
+      assets,
+      assetBuffers,
+      assetR2Keys: presignResult.assetR2Keys,
+      bundleVersion,
+      gameId,
+    });
 
     const uploadStart = Date.now();
     let uploaded = 0;
@@ -1507,8 +1669,11 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
     headers: uploadAuthHeaders(token),
     body: JSON.stringify({
       bundleHtml: payload.bundleHtml,
+      assetFiles,
       allAssetPaths,
+      bundleVersion,
       isNewGame: !isUpdate,
+      runtimeManifest: payload.runtimeManifest,
     }),
   });
 
@@ -1702,6 +1867,12 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
   }
 
   const thumbnailBase64 = await readThumbnail(gamePath);
+  const verticalOnly = orientationOverride ?? publishConfig.verticalOnly;
+  const runtimeManifest = buildUploadRuntimeManifest({
+    isUnity,
+    publishConfig,
+    verticalOnly,
+  });
   const payload: UploadPayload = {
     title: publishConfig.title,
     slug: gameSlug,
@@ -1711,10 +1882,11 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     gameId: uploadAsNew ? undefined : publishConfig.gameId,
     isMultiplayer: publishConfig.isMultiplayer,
     maxPlayers: publishConfig.maxPlayers,
-    verticalOnly: orientationOverride ?? publishConfig.verticalOnly,
+    verticalOnly,
     thumbnailBase64,
     bundleHtml,
     ...(assets ? { assets } : {}),
+    ...(runtimeManifest ? { runtimeManifest } : {}),
   };
 
   if (dryRun) {
@@ -1728,6 +1900,11 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     console.log(`  Creator Email: ${payload.email || "(from login at runtime)"}`);
     console.log(`  Has Thumbnail: ${Boolean(payload.thumbnailBase64)}`);
     console.log(`  Vertical Only: ${payload.verticalOnly ?? true} (default: true)`);
+    if (payload.runtimeManifest) {
+      console.log(
+        `  Runtime Manifest: ${String(payload.runtimeManifest.runtime ?? "web")}/${String(payload.runtimeManifest.engine ?? "html")}`,
+      );
+    }
     console.log(`  Bundle Size: ${(payload.bundleHtml.length / 1024).toFixed(1)} KB`);
     console.log(`  Type: ${isUnity ? "Unity WebGL" : useInlining ? "Inline (legacy)" : "CDN Assets (presigned)"}`);
     if (assets) {
