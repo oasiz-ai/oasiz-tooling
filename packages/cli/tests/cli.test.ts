@@ -950,8 +950,8 @@ test("test-case import posts Studio controller payload with generated artifacts"
     assert.deepEqual(body.launch_manifest, {
       game_id: "breakout",
       graphics: "high",
-      deep_link: "oasiz://game/breakout?e2e=true&graphics=high",
-      uri: "oasiz://game/breakout?e2e=true&graphics=high",
+      deep_link: "oasiz://game/breakout",
+      uri: "oasiz://game/breakout",
     });
 	    assert.deepEqual(body.device_matrix, [{ browserstack_name: "iPhone 14 Pro-16" }]);
 	  });
@@ -1128,8 +1128,8 @@ test("test-case import reads Studio env defaults", async () => {
       assert.deepEqual(body.launch_manifest, {
         game_id: "skyline-aces",
         graphics: "high",
-        deep_link: "oasiz://game/skyline-aces?e2e=true&graphics=high",
-        uri: "oasiz://game/skyline-aces?e2e=true&graphics=high",
+        deep_link: "oasiz://game/skyline-aces",
+        uri: "oasiz://game/skyline-aces",
       });
       assert.deepEqual(body.device_matrix, [{ browserstack_name: "iPhone 14 Pro-16" }, { browserstack_name: "iPhone 12-15" }]);
     } finally {
@@ -1257,12 +1257,12 @@ test("test-case run updates an existing case, auto-detects manifest, polls, and 
     assert.equal(updateBody.test_type, "appium");
     assert.equal(updateBody.app_uri, "bs://app-build");
     assert.match(updateBody.appium_script, /oasiz-appium-v1/);
-    assert.match(updateBody.appium_script, /oasiz:\/\/game\/marble-madness\?e2e=true&graphics=high/);
+    assert.match(updateBody.appium_script, /oasiz:\/\/game\/marble-madness/);
     assert.deepEqual(updateBody.launch_manifest, {
       game_id: "marble-madness",
       graphics: "high",
-      deep_link: "oasiz://game/marble-madness?e2e=true&graphics=high",
-      uri: "oasiz://game/marble-madness?e2e=true&graphics=high",
+      deep_link: "oasiz://game/marble-madness",
+      uri: "oasiz://game/marble-madness",
     });
     assert.deepEqual(updateBody.device_matrix, [{ browserstack_name: "iPhone 12-17" }]);
 

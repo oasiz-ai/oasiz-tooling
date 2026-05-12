@@ -440,18 +440,6 @@ function manifestString(manifest: Record<string, unknown>, ...names: string[]): 
   return undefined;
 }
 
-function appendDeepLinkParam(url: string, name: string, value: string | undefined): string {
-  if (!value) return url;
-  try {
-    const parsed = new URL(url);
-    if (!parsed.searchParams.has(name)) parsed.searchParams.set(name, value);
-    return parsed.toString();
-  } catch {
-    const separator = url.includes("?") ? "&" : "?";
-    return url + separator + encodeURIComponent(name) + "=" + encodeURIComponent(value);
-  }
-}
-
 function normalizeLaunchManifest(manifest: unknown): unknown {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) return manifest;
 
@@ -462,22 +450,6 @@ function normalizeLaunchManifest(manifest: unknown): unknown {
     deepLink = gameId.startsWith("oasiz://") ? gameId : "oasiz://game/" + encodeURIComponent(gameId);
   }
   if (!deepLink) return next;
-
-  const launchParams: Array<[string, string | undefined]> = [
-    ["feature", manifestString(next, "feature", "e2e_feature", "e2eFeature")],
-    ["contentUrl", manifestString(next, "content_url", "contentUrl", "e2e_content_url", "e2eContentUrl")],
-    ["graphics", manifestString(next, "graphics", "graphics_quality", "graphicsQuality", "e2e_graphics", "e2eGraphics")],
-    ["scenario", manifestString(next, "scenario", "e2e_scenario", "e2eScenario")],
-    ["expectedFailure", manifestString(next, "expected_failure", "expectedFailure", "e2e_expected_failure", "e2eExpectedFailure")],
-    ["level", manifestString(next, "level", "level_id", "levelId")],
-  ];
-  const hasLaunchParams = launchParams.some(([, value]) => Boolean(value));
-  if (hasLaunchParams && !manifestString(next, "e2e")) {
-    deepLink = appendDeepLinkParam(deepLink, "e2e", "true");
-  }
-  for (const [name, value] of launchParams) {
-    deepLink = appendDeepLinkParam(deepLink, name, value);
-  }
 
   next.deep_link = deepLink;
   next.uri = deepLink;
