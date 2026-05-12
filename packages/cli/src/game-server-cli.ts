@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { isGameSlug } from "./lib/game.ts";
-import { resolveAuthToken } from "./lib/auth.ts";
+import { resolveStudioAuthToken } from "./lib/auth.ts";
 import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
 const DEFAULT_GAME_SERVER_API_BASE = "https://api.oasiz.ai";
@@ -35,7 +35,7 @@ const VALUE_FLAGS = new Set([
   "--workspace-id",
 ]);
 
-const BOOLEAN_FLAGS = new Set(["--dry-run", "--json", "--wait", "--help", "-h"]);
+const BOOLEAN_FLAGS = new Set(["--dry-run", "--json", "--resume-workspace", "--ensure-workspace", "--wait", "--help", "-h"]);
 const SOURCE_EXCLUDE_NAMES = new Set([".DS_Store", ".env", ".env.local", ".git", ".oasiz", "node_modules"]);
 
 interface ParsedArgs {
@@ -71,6 +71,12 @@ interface GameServerResponse {
   url?: string;
   public_key?: string;
   admin_key?: string;
+}
+
+interface WorkspaceStatusResponse {
+  workspace_id?: string;
+  phase?: string;
+  status_message?: string;
 }
 
 interface SourceUploadInitResponse {
@@ -122,32 +128,25 @@ function loadEnvSync(): void {
 
 function printGameServerHelp(): void {
   console.log("Usage:");
-  console.log("  oasiz game-server create <slug> [options]");
+  console.log("  oasiz create-server [slug]");
   console.log("");
-  console.log("Options:");
-  console.log("  --image <image>             Optional custom OCI image; omit for platform default");
-  console.log("  --room <name>               Room name (default: slug)");
-  console.log("  --entrypoint <path>         Entrypoint (default: server, or rooms/index.ts with --workspace)");
-  console.log("  --workspace <id>            Create from code inside a running workspace");
-  console.log("  --path <path>               Workspace/source server directory (default: server)");
-  console.log("  --build-command <command>   Workspace/source build command");
-  console.log("  --source <dir>              Tar/gzip a local server directory and upload it first");
-  console.log("  --source-upload-id <id>     Create from an already-uploaded source bundle");
-  console.log("  --client-update-hz <n>      Client patch rate, capped at 20 (default: 20)");
-  console.log("  --server-tick-hz <n>        Server simulation tick rate, 0 for unlimited (default: 0)");
-  console.log("  --min-replicas <n>          Minimum replicas (default: 1)");
-  console.log("  --max-replicas <n>          Maximum replicas (default: 10)");
-  console.log("  --api-url <url>             API base URL (default: https://api.oasiz.ai)");
-  console.log("  --wait                      Poll build status until it finishes");
+  console.log("Public options:");
   console.log("  --dry-run                   Print the request without creating a server");
   console.log("  --json                      Print the raw JSON response");
   console.log("  --help, -h                  Show this help message");
   console.log("");
+  console.log("Studio environment defaults:");
+  console.log("  OASIZ_STUDIO_API_URL        Studio/controller API base URL");
+  console.log("  OASIZ_WORKSPACE_ID          Workspace to publish from");
+  console.log("  OASIZ_GAME_SERVER_SLUG      Slug when omitted from the command");
+  console.log("  OASIZ_GAME_SERVER_PATH      Server source directory, usually server");
+  console.log("  OASIZ_GAME_SERVER_ENTRYPOINT Runtime entrypoint, usually rooms/index.ts");
+  console.log("  OASIZ_GAME_SERVER_RESUME_WORKSPACE=true");
+  console.log("  OASIZ_GAME_SERVER_WAIT=true");
+  console.log("");
   console.log("Examples:");
-  console.log("  oasiz game-server create arena");
-  console.log("  oasiz game-server create arena --source server --entrypoint rooms/index.ts --wait");
-  console.log("  oasiz game-server create arena --image us-central1-docker.pkg.dev/.../template:auto-20hz");
-  console.log("  oasiz game-server create arena --workspace 0cfd10db --path server --entrypoint rooms/index.ts");
+  console.log("  oasiz create-server skyline-aces");
+  console.log("  OASIZ_GAME_SERVER_SLUG=skyline-aces oasiz create-server");
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -200,6 +199,32 @@ function valueOf(values: Map<string, string>, ...names: string[]): string | unde
   return undefined;
 }
 
+function envValue(...names: string[]): string | undefined {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function flagOrEnv(values: Map<string, string>, flagNames: string[], envNames: string[]): string | undefined {
+  return valueOf(values, ...flagNames) || envValue(...envNames);
+}
+
+function envBoolean(...names: string[]): boolean | undefined {
+  const value = envValue(...names);
+  if (value === undefined) return undefined;
+  const normalized = value.toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new Error(names[0] + " must be true or false.");
+}
+
+function flagOrEnvBoolean(parsed: ParsedArgs, flagNames: string[], envNames: string[]): boolean {
+  if (flagNames.some((name) => parsed.flagSet.has(name))) return true;
+  return envBoolean(...envNames) === true;
+}
+
 function parseInteger(value: string | undefined, flag: string, fallback: number, min: number, max?: number): number {
   if (value === undefined) return fallback;
   if (!/^[0-9]+$/.test(value)) {
@@ -236,7 +261,11 @@ function sanitizeArchiveRootName(value: string): string {
 }
 
 function getGameServerApiBaseUrl(apiUrlOverride: string | undefined): string {
-  return normalizeApiBase(apiUrlOverride || process.env.OASIZ_GAME_SERVER_API_URL || DEFAULT_GAME_SERVER_API_BASE);
+  return normalizeApiBase(
+    apiUrlOverride ||
+      envValue("OASIZ_GAME_SERVER_API_URL", "OASIZ_STUDIO_API_URL", "OASIZ_CONTROLLER_URL") ||
+      DEFAULT_GAME_SERVER_API_BASE,
+  );
 }
 
 function summarizeErrorBody(raw: string): string {
@@ -254,7 +283,7 @@ async function gameServerRequest<T>(
 ): Promise<T> {
   const requestUrl = apiBaseUrl + (path.startsWith("/") ? path : "/" + path);
   const headers: Record<string, string> = {};
-  const token = await resolveAuthToken();
+  const token = await resolveStudioAuthToken();
 
   if (token) {
     headers.Authorization = "Bearer " + token;
@@ -459,6 +488,10 @@ function getStatusPath(buildId: string): string {
   return "/game-servers/status?build_id=" + encodeURIComponent(buildId);
 }
 
+function getWorkspacePath(workspaceId: string): string {
+  return "/workspaces/" + encodeURIComponent(workspaceId);
+}
+
 function isTerminalStatus(status: string | undefined): boolean {
   const normalized = (status || "").toLowerCase();
   return ["deployed", "failed", "error", "cancelled", "canceled", "succeeded", "success"].includes(normalized);
@@ -491,27 +524,91 @@ async function pollBuildStatus(
   throw new Error("Timed out waiting for game server build: " + buildId);
 }
 
+function workspacePhaseAllowsPublish(phase: string | undefined): boolean {
+  return ["ready", "running", "starting"].includes((phase || "").toLowerCase());
+}
+
+async function resumeWorkspaceBeforePublish(
+  apiBaseUrl: string,
+  workspaceId: string,
+  timeoutMs: number,
+  quiet: boolean,
+): Promise<void> {
+  const initialStatus = await gameServerRequest<WorkspaceStatusResponse>(apiBaseUrl, getWorkspacePath(workspaceId));
+  if (workspacePhaseAllowsPublish(initialStatus.phase)) {
+    if (!quiet) {
+      console.log("Workspace status: " + (initialStatus.phase || "unknown"));
+    }
+    return;
+  }
+  if ((initialStatus.phase || "").toLowerCase() === "failed" || (initialStatus.phase || "").toLowerCase() === "archived") {
+    throw new Error(
+      "Workspace " +
+        workspaceId +
+        " is " +
+        (initialStatus.phase || "unknown") +
+        (initialStatus.status_message ? ": " + initialStatus.status_message : ""),
+    );
+  }
+
+  if (!quiet) {
+    console.log("Resuming workspace: " + workspaceId);
+  }
+  await gameServerRequest<WorkspaceStatusResponse>(apiBaseUrl, getWorkspacePath(workspaceId) + "/resume", {
+    method: "POST",
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  let lastPhase = "";
+  while (Date.now() <= deadline) {
+    const status = await gameServerRequest<WorkspaceStatusResponse>(apiBaseUrl, getWorkspacePath(workspaceId));
+    const phase = status.phase || "unknown";
+    if (!quiet && phase !== lastPhase) {
+      console.log("Workspace status: " + phase);
+      lastPhase = phase;
+    }
+    if (workspacePhaseAllowsPublish(phase)) {
+      return;
+    }
+    if (phase.toLowerCase() === "failed" || phase.toLowerCase() === "archived") {
+      throw new Error("Workspace " + workspaceId + " is " + phase + (status.status_message ? ": " + status.status_message : ""));
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 5000));
+  }
+
+  throw new Error("Timed out waiting for workspace to resume: " + workspaceId);
+}
+
 function buildCreateRequest(parsed: ParsedArgs): {
   apiBaseUrl: string;
   endpointPath: string;
+  workspaceId?: string;
   request: CreateGameServerRequest;
   json: boolean;
   dryRun: boolean;
+  resumeWorkspace: boolean;
   wait: boolean;
   timeoutMs: number;
   sourceBundle?: SourceBundle;
 } {
-  const slug = (valueOf(parsed.values, "--slug") || parsed.positionals[0] || "").trim();
+  const slug = (valueOf(parsed.values, "--slug") || parsed.positionals[0] || envValue("OASIZ_GAME_SERVER_SLUG") || "").trim();
   if (!slug) {
-    throw new Error("Usage: oasiz game-server create <slug>");
+    throw new Error("Usage: oasiz create-server <slug> (or set OASIZ_GAME_SERVER_SLUG)");
   }
   if (!isGameSlug(slug)) {
     throw new Error("Invalid game server slug. Use lowercase letters, numbers, and hyphens only.");
   }
 
-  const workspaceId = valueOf(parsed.values, "--workspace", "--workspace-id")?.trim();
-  const sourceUploadId = valueOf(parsed.values, "--source-upload-id")?.trim();
-  const sourcePath = valueOf(parsed.values, "--source", "--source-dir")?.trim();
+  const workspaceId = flagOrEnv(parsed.values, ["--workspace", "--workspace-id"], [
+    "OASIZ_WORKSPACE_ID",
+    "OASIZ_STUDIO_WORKSPACE_ID",
+    "WORKSPACE_ID",
+  ])?.trim();
+  const sourceUploadId = flagOrEnv(parsed.values, ["--source-upload-id"], ["OASIZ_GAME_SERVER_SOURCE_UPLOAD_ID"])?.trim();
+  const sourcePath = flagOrEnv(parsed.values, ["--source", "--source-dir"], [
+    "OASIZ_GAME_SERVER_SOURCE_DIR",
+    "OASIZ_GAME_SERVER_SOURCE",
+  ])?.trim();
   const sourceInputCount = [sourceUploadId, sourcePath].filter(Boolean).length;
   if (sourceInputCount > 1) {
     throw new Error("Use only one of --source or --source-upload-id.");
@@ -519,42 +616,56 @@ function buildCreateRequest(parsed: ParsedArgs): {
   if (workspaceId && sourceInputCount > 0) {
     throw new Error("Do not combine --workspace with source upload flags.");
   }
+  const resumeWorkspace = flagOrEnvBoolean(parsed, ["--resume-workspace", "--ensure-workspace"], [
+    "OASIZ_GAME_SERVER_RESUME_WORKSPACE",
+    "OASIZ_GAME_SERVER_ENSURE_WORKSPACE",
+  ]);
+  if (resumeWorkspace && !workspaceId) {
+    throw new Error("--resume-workspace requires --workspace or OASIZ_WORKSPACE_ID.");
+  }
 
-  const roomName = (valueOf(parsed.values, "--room", "--room-name") || slug).trim();
+  const roomName = (flagOrEnv(parsed.values, ["--room", "--room-name"], [
+    "OASIZ_GAME_SERVER_ROOM",
+    "OASIZ_GAME_SERVER_ROOM_NAME",
+  ]) || slug).trim();
   const sourceArchiveRootName = sourcePath ? sanitizeArchiveRootName(basename(resolveProjectPath(sourcePath))) : undefined;
   const usesSource = Boolean(sourceUploadId || sourcePath);
   const entrypoint =
-    valueOf(parsed.values, "--entrypoint")?.trim() || (workspaceId || usesSource ? "rooms/index.ts" : "server");
+    flagOrEnv(parsed.values, ["--entrypoint"], ["OASIZ_GAME_SERVER_ENTRYPOINT"])?.trim() ||
+    (workspaceId || usesSource ? "rooms/index.ts" : "server");
   const serverPath =
-    valueOf(parsed.values, "--path")?.trim() ||
+    flagOrEnv(parsed.values, ["--path"], ["OASIZ_GAME_SERVER_PATH"])?.trim() ||
     (sourceArchiveRootName ? sourceArchiveRootName : workspaceId || sourceUploadId ? "server" : undefined);
-  const buildCommand = valueOf(parsed.values, "--build-command")?.trim();
-  const image = valueOf(parsed.values, "--image", "--template-image")?.trim();
+  const buildCommand = flagOrEnv(parsed.values, ["--build-command"], ["OASIZ_GAME_SERVER_BUILD_COMMAND"])?.trim();
+  const image = flagOrEnv(parsed.values, ["--image", "--template-image"], [
+    "OASIZ_GAME_SERVER_IMAGE",
+    "OASIZ_GAME_SERVER_TEMPLATE_IMAGE",
+  ])?.trim();
   if (image && usesSource) {
     throw new Error("Use either --image or source upload flags, not both.");
   }
 
   const clientUpdateHz = parseInteger(
-    valueOf(parsed.values, "--client-update-hz"),
+    flagOrEnv(parsed.values, ["--client-update-hz"], ["OASIZ_GAME_SERVER_CLIENT_UPDATE_HZ"]),
     "--client-update-hz",
     DEFAULT_CLIENT_UPDATE_HZ,
     1,
     20,
   );
   const serverTickHz = parseInteger(
-    valueOf(parsed.values, "--server-tick-hz"),
+    flagOrEnv(parsed.values, ["--server-tick-hz"], ["OASIZ_GAME_SERVER_SERVER_TICK_HZ"]),
     "--server-tick-hz",
     DEFAULT_SERVER_TICK_HZ,
     0,
   );
   const minReplicas = parseInteger(
-    valueOf(parsed.values, "--min-replicas"),
+    flagOrEnv(parsed.values, ["--min-replicas"], ["OASIZ_GAME_SERVER_MIN_REPLICAS"]),
     "--min-replicas",
     DEFAULT_MIN_REPLICAS,
     1,
   );
   const maxReplicas = parseInteger(
-    valueOf(parsed.values, "--max-replicas"),
+    flagOrEnv(parsed.values, ["--max-replicas"], ["OASIZ_GAME_SERVER_MAX_REPLICAS"]),
     "--max-replicas",
     DEFAULT_MAX_REPLICAS,
     1,
@@ -562,7 +673,12 @@ function buildCreateRequest(parsed: ParsedArgs): {
   if (maxReplicas < minReplicas) {
     throw new Error("--max-replicas must be greater than or equal to --min-replicas.");
   }
-  const timeoutMs = parseInteger(valueOf(parsed.values, "--timeout-ms"), "--timeout-ms", 10 * 60 * 1000, 1000);
+  const timeoutMs = parseInteger(
+    flagOrEnv(parsed.values, ["--timeout-ms"], ["OASIZ_GAME_SERVER_TIMEOUT_MS"]),
+    "--timeout-ms",
+    10 * 60 * 1000,
+    1000,
+  );
 
   const request: CreateGameServerRequest = {
     custom_slug: slug,
@@ -584,10 +700,12 @@ function buildCreateRequest(parsed: ParsedArgs): {
   return {
     apiBaseUrl,
     endpointPath,
+    ...(workspaceId ? { workspaceId } : {}),
     request,
-    json: parsed.flagSet.has("--json"),
-    dryRun: parsed.flagSet.has("--dry-run"),
-    wait: parsed.flagSet.has("--wait"),
+    json: flagOrEnvBoolean(parsed, ["--json"], ["OASIZ_GAME_SERVER_JSON", "OASIZ_CLI_JSON"]),
+    dryRun: flagOrEnvBoolean(parsed, ["--dry-run"], ["OASIZ_GAME_SERVER_DRY_RUN", "OASIZ_CLI_DRY_RUN"]),
+    resumeWorkspace,
+    wait: flagOrEnvBoolean(parsed, ["--wait"], ["OASIZ_GAME_SERVER_WAIT"]),
     timeoutMs,
     ...(sourcePath
       ? {
@@ -626,9 +744,15 @@ async function commandCreate(argv: string[]): Promise<void> {
     return;
   }
 
-  const { apiBaseUrl, endpointPath, request, json, dryRun, wait, timeoutMs, sourceBundle } = buildCreateRequest(parsed);
+  const { apiBaseUrl, endpointPath, workspaceId, request, json, dryRun, resumeWorkspace, wait, timeoutMs, sourceBundle } =
+    buildCreateRequest(parsed);
   if (dryRun) {
     console.log("Would create game server:");
+    if (resumeWorkspace) {
+      const resolvedWorkspaceId = workspaceId || "";
+      console.log("  POST " + apiBaseUrl + getWorkspacePath(resolvedWorkspaceId) + "/resume");
+      console.log("  GET " + apiBaseUrl + getWorkspacePath(resolvedWorkspaceId) + " (until workspace pod is running)");
+    }
     if (sourceBundle) {
       console.log("  POST " + apiBaseUrl + "/game-servers/uploads");
       console.log("  PUT {upload_url} (" + sourceBundle.filename + ", " + String(sourceBundle.bytes.length) + " bytes)");
@@ -642,6 +766,9 @@ async function commandCreate(argv: string[]): Promise<void> {
 
   if (sourceBundle) {
     request.source_upload_id = await uploadSourceBundle(apiBaseUrl, sourceBundle, json);
+  }
+  if (resumeWorkspace) {
+    await resumeWorkspaceBeforePublish(apiBaseUrl, workspaceId || "", timeoutMs, json);
   }
 
   const result = await gameServerRequest<GameServerResponse>(apiBaseUrl, endpointPath, {
@@ -671,12 +798,18 @@ async function commandStatus(argv: string[]): Promise<void> {
   }
 
   const apiBaseUrl = getGameServerApiBaseUrl(valueOf(parsed.values, "--api-url"));
-  const timeoutMs = parseInteger(valueOf(parsed.values, "--timeout-ms"), "--timeout-ms", 10 * 60 * 1000, 1000);
-  const result = parsed.flagSet.has("--wait")
-    ? await pollBuildStatus(apiBaseUrl, buildId, timeoutMs, parsed.flagSet.has("--json"))
+  const timeoutMs = parseInteger(
+    flagOrEnv(parsed.values, ["--timeout-ms"], ["OASIZ_GAME_SERVER_TIMEOUT_MS"]),
+    "--timeout-ms",
+    10 * 60 * 1000,
+    1000,
+  );
+  const json = flagOrEnvBoolean(parsed, ["--json"], ["OASIZ_GAME_SERVER_JSON", "OASIZ_CLI_JSON"]);
+  const result = flagOrEnvBoolean(parsed, ["--wait"], ["OASIZ_GAME_SERVER_WAIT"])
+    ? await pollBuildStatus(apiBaseUrl, buildId, timeoutMs, json)
     : await gameServerRequest<GameServerResponse>(apiBaseUrl, getStatusPath(buildId));
 
-  if (parsed.flagSet.has("--json")) {
+  if (json) {
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -687,8 +820,12 @@ async function commandStatus(argv: string[]): Promise<void> {
 export async function runGameServerCli(args: string[] = []): Promise<void> {
   loadEnvSync();
   const command = args[0];
-  if (!command || command === "--help" || command === "-h") {
+  if (command === "--help" || command === "-h") {
     printGameServerHelp();
+    return;
+  }
+  if (!command || command.startsWith("-")) {
+    await commandCreate(args);
     return;
   }
 
