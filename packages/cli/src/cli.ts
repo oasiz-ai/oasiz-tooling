@@ -21,6 +21,7 @@ import {
   type StudioDraft,
 } from "./lib/api.ts";
 import { runGameServerCli } from "./game-server-cli.ts";
+import { runTestCaseCli } from "./test-case-cli.ts";
 import {
   getGamePath,
   isGameSlug,
@@ -44,12 +45,14 @@ function printHelp(): void {
   console.log("    --template <name>         Use template from package assets");
   console.log("  oasiz info                  Show all commands");
   console.log("  oasiz upload <game>         Build + upload with draft wizard");
-  console.log("  oasiz game-server create    Create a Colyseus game server");
+  console.log("  oasiz create-server [slug]  Create a Studio Colyseus game server");
+  console.log("  oasiz test-case             Import/update a Studio mobile test case");
   console.log("  oasiz versions <game>       List studio drafts for a game");
   console.log("  oasiz activate <game>       Promote draft to live version");
   console.log("  oasiz list                  List local game folders");
   console.log("  oasiz games                 List your platform games");
   console.log("  oasiz login                 Browser login via Oasiz app");
+  console.log("  oasiz login --studio        Browser login with developer access for Studio workflows");
   console.log("  oasiz login --no-open       Print URL only (do not auto-open)");
   console.log("  oasiz logout                Clear saved CLI token");
   console.log("  oasiz whoami                Show auth state");
@@ -713,21 +716,29 @@ async function commandLogin(argv: string[]): Promise<void> {
   const token = parsed.values.get("--token");
   const email = parsed.values.get("--email");
   const noOpen = parsed.flagSet.has("--no-open");
+  const studio = parsed.flagSet.has("--studio");
 
   if (token) {
     await saveStoredCredentials({
       token,
       email,
+      ...(studio ? { developer: true } : {}),
       createdAt: new Date().toISOString(),
     });
     console.log("Saved credentials at local CLI store.");
     return;
   }
 
-  const loginResult = await runBrowserLoginFlow(!noOpen);
+  const loginResult = await runBrowserLoginFlow(!noOpen, studio ? { requireDeveloper: true } : {});
+  if (studio && loginResult.developer !== true) {
+    throw new Error(
+      "Developer access is required for Studio workflows. Email contact@oasiz.ai to join the Oasiz Developers Program.",
+    );
+  }
   await saveStoredCredentials({
     token: loginResult.token,
     email: loginResult.email,
+    developer: loginResult.developer,
     createdAt: new Date().toISOString(),
   });
   console.log("Login successful.");
@@ -807,6 +818,15 @@ export async function runCli(argv: string[] = process.argv.slice(2)): Promise<vo
       case "server":
       case "servers":
         await runGameServerCli(argv.slice(1));
+        return;
+      case "create-server":
+        await runGameServerCli(["create", ...argv.slice(1)]);
+        return;
+      case "test-case":
+      case "test-cases":
+      case "studio-test":
+      case "studio-tests":
+        await runTestCaseCli(argv.slice(1));
         return;
       case "versions":
         if (!value) fail("Usage: oasiz versions <game>");

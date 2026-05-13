@@ -25,20 +25,20 @@ oasiz.submitScore(1200);
 
 ```bash
 npx @oasiz/cli upload block-blast
-npx @oasiz/cli game-server create arena
-npx @oasiz/cli game-server create arena --source server --entrypoint rooms/index.ts --wait
+npx @oasiz/cli create-server skyline-aces
+npx @oasiz/cli test-case
+npx @oasiz/cli test-case run
 ```
 
 The CLI expects to be run from the root of a game-studio style repository that
 contains game folders, optional `publish.json` metadata, and an optional `.env`
-with `OASIZ_UPLOAD_TOKEN`, `OASIZ_EMAIL`, and `OASIZ_API_URL`.
-Game server creation defaults to
-`https://api.oasiz.ai` and can be overridden with
-`OASIZ_GAME_SERVER_API_URL` or `--api-url`.
-Game servers are standalone unless `--workspace`/`--workspace-id` is provided.
-Local custom server code can be uploaded with `--source <dir>`, which creates a
-source bundle, uploads it through `/game-servers/uploads`, creates with the
-returned `source_upload_id`, and can poll the build with `--wait`.
+with `OASIZ_UPLOAD_TOKEN`, `OASIZ_EMAIL`, and `OASIZ_API_URL` for upload flows.
+Studio workflows use simplified public commands: `oasiz create-server [slug]`
+and `oasiz test-case`. Studio/CI/project env should provide defaults such as
+`OASIZ_STUDIO_API_URL`, `OASIZ_WORKSPACE_ID`, `OASIZ_GAME_SERVER_PATH`,
+`OASIZ_GAME_SERVER_ENTRYPOINT`, `OASIZ_TEST_CASE_NAME`,
+`OASIZ_TEST_OBJECTIVE`, `OASIZ_TEST_PATHS`, `OASIZ_TEST_OUTPUT_PATH`, and
+`OASIZ_TEST_ARTIFACTS_DIR`, plus replay/Appium/app provider values.
 
 ## SDK Releases
 

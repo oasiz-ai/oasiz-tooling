@@ -9,6 +9,7 @@ import { getProjectRoot } from "./runtime.ts";
 export interface StoredCredentials {
   token: string;
   email?: string;
+  developer?: boolean;
   createdAt: string;
 }
 
@@ -16,10 +17,17 @@ export interface BrowserLoginResult {
   token: string;
   email?: string;
   expiresAt?: string;
+  developer?: boolean;
+}
+
+export interface BrowserLoginOptions {
+  requireDeveloper?: boolean;
 }
 
 const DEFAULT_API_BASE = "http://localhost:3001";
 const DEFAULT_WEB_BASE = "https://oasiz.ai";
+const DEVELOPER_ACCESS_ERROR =
+  "Developer access is required for Studio workflows. Email contact@oasiz.ai to join the Oasiz Developers Program.";
 
 function normalizeApiBase(raw: string): string {
   let value = raw.trim();
@@ -103,6 +111,7 @@ async function readStoredCredentialsAtPath(path: string): Promise<StoredCredenti
     return {
       token: data.token,
       email: data.email,
+      developer: data.developer === true,
       createdAt: data.createdAt || new Date(0).toISOString(),
     };
   } catch {
@@ -165,6 +174,27 @@ export async function requireAuthToken(): Promise<string> {
   return token;
 }
 
+export async function resolveStudioAuthToken(openBrowser = true): Promise<string | null> {
+  if (process.env.OASIZ_CLI_TOKEN) return process.env.OASIZ_CLI_TOKEN;
+
+  const stored = await readStoredCredentials();
+  if (stored?.token && stored.developer === true) {
+    return stored.token;
+  }
+
+  const loginResult = await runBrowserLoginFlow(openBrowser, { requireDeveloper: true });
+  if (loginResult.developer !== true) {
+    throw new Error(DEVELOPER_ACCESS_ERROR);
+  }
+  await saveStoredCredentials({
+    token: loginResult.token,
+    email: loginResult.email,
+    developer: true,
+    createdAt: new Date().toISOString(),
+  });
+  return loginResult.token;
+}
+
 async function openInBrowser(url: string): Promise<void> {
   const platform = process.platform;
 
@@ -221,10 +251,14 @@ async function findOpenPort(): Promise<number> {
   });
 }
 
-export async function runBrowserLoginFlow(openBrowser: boolean): Promise<BrowserLoginResult> {
+export async function runBrowserLoginFlow(
+  openBrowser: boolean,
+  options: BrowserLoginOptions = {},
+): Promise<BrowserLoginResult> {
   const state = crypto.randomUUID();
   const webBase = getWebBaseUrl();
   const callbackPort = await findOpenPort();
+  const requireDeveloper = options.requireDeveloper === true;
   let settled = false;
   let resolveLogin!: (value: BrowserLoginResult) => void;
   let rejectLogin!: (error: Error) => void;
@@ -251,6 +285,7 @@ export async function runBrowserLoginFlow(openBrowser: boolean): Promise<Browser
     const token = url.searchParams.get("token") || "";
     const email = url.searchParams.get("email") || undefined;
     const expiresAt = url.searchParams.get("expiresAt") || undefined;
+    const developer = url.searchParams.get("developer") === "true";
     const error = url.searchParams.get("error");
 
     if (settled) {
@@ -279,7 +314,7 @@ export async function runBrowserLoginFlow(openBrowser: boolean): Promise<Browser
     }
 
     settled = true;
-    const loginResult: BrowserLoginResult = { token, email, expiresAt };
+    const loginResult: BrowserLoginResult = { token, email, expiresAt, developer };
     setTimeout(() => {
       resolveLogin(loginResult);
     }, 300);
@@ -306,7 +341,9 @@ export async function runBrowserLoginFlow(openBrowser: boolean): Promise<Browser
       "<body>",
       "<section class=\"card\">",
       "<div class=\"brand\">OASIZ</div>",
-      "<h1 class=\"title\">CLI LOGIN COMPLETE</h1>",
+      "<h1 class=\"title\">" +
+        (requireDeveloper ? "DEVELOPER CLI LOGIN COMPLETE" : "CLI LOGIN COMPLETE") +
+        "</h1>",
       "<p class=\"desc\">Authentication finished successfully. You can close this tab and continue in your terminal.</p>",
       "<div class=\"status\"><span class=\"dot\"></span>Connected</div>",
       "<p class=\"foot\">This window can now be closed.</p>",
@@ -328,7 +365,11 @@ export async function runBrowserLoginFlow(openBrowser: boolean): Promise<Browser
   });
 
   try {
-    const loginUrl = webBase + "/cli-auth?port=" + String(callbackPort) + "&state=" + encodeURIComponent(state);
+    const loginSearch = new URLSearchParams({
+      port: String(callbackPort),
+      state,
+    });
+    const loginUrl = webBase + "/cli-auth?" + loginSearch.toString();
     console.log("Open this URL to continue login:");
     console.log("  " + loginUrl);
     if (openBrowser) {

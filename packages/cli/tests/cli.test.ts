@@ -194,6 +194,140 @@ test("browser login callback settles and clears timeout", async () => {
   });
 });
 
+test("studio login uses shared auth route and stores developer credentials", async () => {
+  await withTempProject(async (root) => {
+    const credentialsPath = join(root, "studio-credentials.json");
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const previousWeb = process.env.OASIZ_WEB_URL;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let loginUrl = "";
+
+    process.env.OASIZ_CREDENTIALS_PATH = credentialsPath;
+    process.env.OASIZ_WEB_URL = "http://login.test";
+    console.log = (...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      logs.push(line);
+      if (line.includes("/cli-auth?")) {
+        loginUrl = line.trim();
+      }
+    };
+
+    try {
+      const loginPromise = runCli(["login", "--studio", "--no-open"]);
+      const start = Date.now();
+      while (!loginUrl && Date.now() - start < 2000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(loginUrl, "expected login URL to be printed");
+
+      const parsed = new URL(loginUrl);
+      assert.equal(parsed.searchParams.get("developer"), null);
+      assert.equal(parsed.searchParams.get("audience"), null);
+      const callbackPort = parsed.searchParams.get("port");
+      const state = parsed.searchParams.get("state");
+      assert.ok(callbackPort);
+      assert.ok(state);
+
+      const callbackUrl =
+        "http://localhost:" +
+        callbackPort +
+        "/callback?token=studio-token&email=dev%40example.com&developer=true&state=" +
+        encodeURIComponent(state);
+      const callbackResponse = await fetch(callbackUrl);
+      assert.equal(callbackResponse.status, 200);
+
+      await Promise.race([
+        loginPromise,
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("studio login did not settle")), 2000);
+        }),
+      ]);
+
+      const saved = JSON.parse(await readFile(credentialsPath, "utf8")) as {
+        token?: string;
+        email?: string;
+        developer?: boolean;
+      };
+      assert.equal(saved.token, "studio-token");
+      assert.equal(saved.email, "dev@example.com");
+      assert.equal(saved.developer, true);
+    } finally {
+      console.log = originalLog;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+      if (previousWeb === undefined) delete process.env.OASIZ_WEB_URL;
+      else process.env.OASIZ_WEB_URL = previousWeb;
+    }
+  });
+});
+
+test("studio login reports developer access errors with contact email", async () => {
+  await withTempProject(async (root) => {
+    const credentialsPath = join(root, "studio-credentials.json");
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const previousWeb = process.env.OASIZ_WEB_URL;
+    const originalLog = console.log;
+    const logs: string[] = [];
+    let loginUrl = "";
+
+    process.env.OASIZ_CREDENTIALS_PATH = credentialsPath;
+    process.env.OASIZ_WEB_URL = "http://login.test";
+    console.log = (...args: unknown[]) => {
+      const line = args.map(String).join(" ");
+      logs.push(line);
+      if (line.includes("/cli-auth?")) {
+        loginUrl = line.trim();
+      }
+    };
+
+    try {
+      const loginPromise = runCli(["login", "--studio", "--no-open"]).then(
+        () => null,
+        (error) => error as Error,
+      );
+      const start = Date.now();
+      while (!loginUrl && Date.now() - start < 2000) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(loginUrl, "expected login URL to be printed");
+
+      const parsed = new URL(loginUrl);
+      const callbackPort = parsed.searchParams.get("port");
+      const state = parsed.searchParams.get("state");
+      assert.ok(callbackPort);
+      assert.ok(state);
+
+      const message =
+        "Developer access is required for Studio workflows. Email contact@oasiz.ai to join the Oasiz Developers Program.";
+      const callbackUrl =
+        "http://localhost:" +
+        callbackPort +
+        "/callback?error=" +
+        encodeURIComponent(message) +
+        "&state=" +
+        encodeURIComponent(state);
+      const callbackResponse = await fetch(callbackUrl);
+      assert.equal(callbackResponse.status, 400);
+
+      const error = await Promise.race([
+        loginPromise,
+        new Promise<Error>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("studio login did not settle")), 2000);
+        }),
+      ]);
+      assert.ok(error);
+      assert.match(error.message, /contact@oasiz\.ai/);
+    } finally {
+      console.log = originalLog;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+      if (previousWeb === undefined) delete process.env.OASIZ_WEB_URL;
+      else process.env.OASIZ_WEB_URL = previousWeb;
+    }
+  });
+});
+
 test("api errors include target request URL", async () => {
   const apiPath = fileURLToPath(new URL("../src/lib/api.ts", import.meta.url));
   const source = await readFile(apiPath, "utf8");
@@ -282,7 +416,7 @@ test("game-server create supports workspace-backed route and api-stage shorthand
     const calls: Array<{ url: string; method: string; body: string }> = [];
 
     delete process.env.OASIZ_GAME_SERVER_API_URL;
-    delete process.env.OASIZ_CLI_TOKEN;
+    process.env.OASIZ_CLI_TOKEN = "env-token";
     delete process.env.OASIZ_UPLOAD_TOKEN;
     process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
     globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -351,6 +485,226 @@ test("game-server create supports workspace-backed route and api-stage shorthand
       path: "server",
       build_command: "npm run build",
     });
+  });
+});
+
+test("create-server reads Studio env defaults", async () => {
+  await withTempProject(async () => {
+    const envKeys = [
+      "OASIZ_CLI_TOKEN",
+      "OASIZ_UPLOAD_TOKEN",
+      "OASIZ_CREDENTIALS_PATH",
+      "OASIZ_STUDIO_API_URL",
+      "OASIZ_WORKSPACE_ID",
+      "OASIZ_GAME_SERVER_SLUG",
+      "OASIZ_GAME_SERVER_ROOM",
+      "OASIZ_GAME_SERVER_PATH",
+      "OASIZ_GAME_SERVER_ENTRYPOINT",
+      "OASIZ_GAME_SERVER_BUILD_COMMAND",
+      "OASIZ_GAME_SERVER_CLIENT_UPDATE_HZ",
+      "OASIZ_GAME_SERVER_MIN_REPLICAS",
+      "OASIZ_GAME_SERVER_MAX_REPLICAS",
+      "OASIZ_GAME_SERVER_RESUME_WORKSPACE",
+      "OASIZ_GAME_SERVER_DRY_RUN",
+    ];
+    const previous = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      process.env.OASIZ_CLI_TOKEN = "env-token";
+      delete process.env.OASIZ_UPLOAD_TOKEN;
+      process.env.OASIZ_CREDENTIALS_PATH = join(tmpdir(), "missing-oasiz-env-defaults.json");
+      process.env.OASIZ_STUDIO_API_URL = "https://studio.test/api/controller";
+      process.env.OASIZ_WORKSPACE_ID = "ws-env";
+      process.env.OASIZ_GAME_SERVER_SLUG = "skyline-aces-env";
+      process.env.OASIZ_GAME_SERVER_ROOM = "skyline-room";
+      process.env.OASIZ_GAME_SERVER_PATH = "server";
+      process.env.OASIZ_GAME_SERVER_ENTRYPOINT = "rooms/index.ts";
+      process.env.OASIZ_GAME_SERVER_BUILD_COMMAND = "npm run build";
+      process.env.OASIZ_GAME_SERVER_CLIENT_UPDATE_HZ = "15";
+      process.env.OASIZ_GAME_SERVER_MIN_REPLICAS = "2";
+      process.env.OASIZ_GAME_SERVER_MAX_REPLICAS = "5";
+      process.env.OASIZ_GAME_SERVER_RESUME_WORKSPACE = "true";
+      process.env.OASIZ_GAME_SERVER_DRY_RUN = "true";
+
+      const output = await captureOutput(async () => {
+        await runCli(["create-server"]);
+      });
+
+      assert.match(output, /POST https:\/\/studio\.test\/api\/controller\/workspaces\/ws-env\/resume/);
+      assert.match(output, /POST https:\/\/studio\.test\/api\/controller\/workspaces\/ws-env\/game-servers/);
+      assert.match(output, /"custom_slug": "skyline-aces-env"/);
+      assert.match(output, /"room_name": "skyline-room"/);
+      assert.match(output, /"entrypoint": "rooms\/index.ts"/);
+      assert.match(output, /"client_update_hz": 15/);
+      assert.match(output, /"min_replicas": 2/);
+      assert.match(output, /"max_replicas": 5/);
+      assert.match(output, /"path": "server"/);
+      assert.match(output, /"build_command": "npm run build"/);
+    } finally {
+      for (const key of envKeys) {
+        const value = previous.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+test("game-server create can resume a workspace before publishing", async () => {
+  await withTempProject(async (root) => {
+    const previousGameServerApi = process.env.OASIZ_GAME_SERVER_API_URL;
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string }> = [];
+    let workspaceStatusReads = 0;
+
+    delete process.env.OASIZ_GAME_SERVER_API_URL;
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body });
+
+      if (url === "https://api-stage.oasiz.ai/workspaces/0cfd10db") {
+        workspaceStatusReads += 1;
+        return Response.json({
+          workspace_id: "0cfd10db",
+          phase: workspaceStatusReads === 1 ? "Stopped" : "Starting",
+        });
+      }
+
+      if (url === "https://api-stage.oasiz.ai/workspaces/0cfd10db/resume") {
+        return Response.json({ workspace_id: "0cfd10db", phase: "Creating" });
+      }
+
+      if (url === "https://api-stage.oasiz.ai/workspaces/0cfd10db/game-servers") {
+        return Response.json({
+          workspace_id: "0cfd10db",
+          scope: "workspace",
+          build_id: "gs-build-test",
+          slug: "arena",
+          status: "building",
+          url: "https://gs-0cfd10db-arena.games.studio-stage.oasiz.ai",
+        });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    let output = "";
+    try {
+      output = await captureOutput(async () => {
+        await runCli([
+          "game-server",
+          "create",
+          "arena",
+          "--workspace",
+          "0cfd10db",
+          "--api-url",
+          "api-stage",
+          "--path",
+          "server",
+          "--entrypoint",
+          "rooms/index.ts",
+          "--resume-workspace",
+        ]);
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousGameServerApi === undefined) delete process.env.OASIZ_GAME_SERVER_API_URL;
+      else process.env.OASIZ_GAME_SERVER_API_URL = previousGameServerApi;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.match(output, /Resuming workspace: 0cfd10db/);
+    assert.match(output, /Workspace status: Starting/);
+    assert.match(output, /Build ID: gs-build-test/);
+    assert.equal(calls.length, 4);
+    assert.equal(calls[0].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db");
+    assert.equal(calls[0].method, "GET");
+    assert.equal(calls[1].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db/resume");
+    assert.equal(calls[1].method, "POST");
+    assert.equal(calls[2].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db");
+    assert.equal(calls[2].method, "GET");
+    assert.equal(calls[3].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db/game-servers");
+    assert.equal(calls[3].method, "POST");
+  });
+});
+
+test("game-server create skips resume when workspace is already running", async () => {
+  await withTempProject(async (root) => {
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string }> = [];
+
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body });
+
+      if (url === "https://api-stage.oasiz.ai/workspaces/0cfd10db") {
+        return Response.json({ workspace_id: "0cfd10db", phase: "Ready" });
+      }
+
+      if (url === "https://api-stage.oasiz.ai/workspaces/0cfd10db/game-servers") {
+        return Response.json({
+          workspace_id: "0cfd10db",
+          scope: "workspace",
+          build_id: "gs-build-test",
+          slug: "arena",
+          status: "building",
+        });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "game-server",
+          "create",
+          "arena",
+          "--workspace",
+          "0cfd10db",
+          "--api-url",
+          "api-stage",
+          "--resume-workspace",
+        ]);
+      });
+
+      assert.match(output, /Workspace status: Ready/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db");
+    assert.equal(calls[0].method, "GET");
+    assert.equal(calls[1].url, "https://api-stage.oasiz.ai/workspaces/0cfd10db/game-servers");
+    assert.equal(calls[1].method, "POST");
   });
 });
 
@@ -476,6 +830,669 @@ test("game-server create uploads local source bundle before creating server", as
   });
 });
 
+test("test-case import posts Studio controller payload with generated artifacts", async () => {
+  await withTempProject(async (root) => {
+    await writeFile(join(root, "recording.json"), JSON.stringify({ width: 1280, height: 720, events: [] }), "utf8");
+    await writeFile(join(root, "launch.json"), JSON.stringify({ game_id: "breakout", graphics: "high" }), "utf8");
+    await writeFile(
+      join(root, "appium.json"),
+      JSON.stringify({ version: "oasiz-appium-v1", commands: [{ type: "tap_element", using: "name", value: "Play!" }] }),
+      "utf8",
+    );
+
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string; headers?: HeadersInit }> = [];
+
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body, headers: init.headers });
+
+      return Response.json(
+        {
+	          id: "tc-test",
+	          workspace_id: "ws-123",
+	          name: "Recorded Appium",
+	          game: "breakout",
+	          provider: "app-percy",
+	          test_type: "appium",
+	          app_uri: "bs://app-build",
+	          status: "draft",
+	          conversion_status: "ready",
+        },
+        { status: 201 },
+      );
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "test-case",
+          "import",
+          "--api-url",
+          "https://controller.test",
+	          "--workspace",
+	          "ws-123",
+	          "--name",
+	          "Recorded Appium",
+          "--game",
+          "breakout",
+          "--description",
+          "from recording",
+          "--objective",
+          "Reproduce the issue and verify the first level remains playable.",
+          "--notify",
+          "QA@example.com,dev@example.com",
+          "--provider",
+          "app-percy",
+          "--app-uri",
+          "bs://app-build",
+	          "--replay",
+	          "recording.json",
+	          "--appium",
+	          "appium.json",
+          "--launch-manifest",
+          "launch.json",
+	          "--device",
+	          "iPhone 14 Pro-16",
+        ]);
+      });
+
+      assert.match(output, /Studio test case imported/);
+      assert.match(output, /ID: tc-test/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://controller.test/test-cases");
+    assert.equal(calls[0].method, "POST");
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    const body = JSON.parse(calls[0].body) as {
+      workspace_id: string;
+      name: string;
+      game: string;
+      description: string;
+      objective: string;
+      notification_emails: string[];
+      provider: string;
+      test_type: string;
+      app_uri: string;
+	      replay_script: { width: number; height: number; events: unknown[] };
+	      appium_script: string;
+      launch_manifest: { game_id: string; graphics: string };
+	      device_matrix: Array<{ browserstack_name: string }>;
+	    };
+	    assert.equal(body.workspace_id, "ws-123");
+	    assert.equal(body.name, "Recorded Appium");
+    assert.equal(body.game, "breakout");
+    assert.equal(body.description, "from recording");
+    assert.equal(body.objective, "Reproduce the issue and verify the first level remains playable.");
+    assert.deepEqual(body.notification_emails, ["qa@example.com", "dev@example.com"]);
+    assert.equal(body.provider, "app-percy");
+	    assert.equal(body.test_type, "appium");
+	    assert.equal(body.app_uri, "bs://app-build");
+	    assert.deepEqual(body.replay_script, { width: 1280, height: 720, events: [] });
+	    assert.match(body.appium_script, /oasiz-appium-v1/);
+    assert.deepEqual(body.launch_manifest, {
+      game_id: "breakout",
+      graphics: "high",
+      deep_link: "oasiz://game/breakout",
+      uri: "oasiz://game/breakout",
+    });
+	    assert.deepEqual(body.device_matrix, [{ browserstack_name: "iPhone 14 Pro-16" }]);
+	  });
+	});
+
+test("test-case import can upload an app file before updating an existing case", async () => {
+  await withTempProject(async (root) => {
+    await writeFile(join(root, "app.ipa"), Buffer.from("ipa"));
+    await writeFile(join(root, "appium.json"), '{"version":"oasiz-appium-v1","commands":[{"type":"wait","ms":500}]}', "utf8");
+
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: BodyInit | null | undefined; headers?: HeadersInit }> = [];
+
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      calls.push({ url, method, body: init.body, headers: init.headers });
+
+      if (url === "https://controller.test/test-apps/uploads") {
+        return Response.json({
+          id: "test-app-upload",
+          status: "pending",
+          upload_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          complete_path: "/test-apps/uploads/test-app-upload/complete?token=upload-token",
+          status_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          max_bytes: 1024,
+        });
+      }
+
+      if (url === "https://controller.test/test-apps/uploads/test-app-upload?token=upload-token") {
+        return Response.json({
+          id: "test-app-upload",
+          status: "uploaded",
+          complete_path: "/test-apps/uploads/test-app-upload/complete?token=upload-token",
+          status_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          size: 3,
+        });
+      }
+
+      if (url === "https://controller.test/test-apps/uploads/test-app-upload/complete?token=upload-token") {
+        return Response.json({ id: "test-app-upload", status: "complete", app_uri: "bs://uploaded-app" });
+      }
+
+      if (url === "https://controller.test/test-cases/tc-test") {
+        return Response.json({
+          id: "tc-test",
+          workspace_id: "ws-123",
+	          name: "Updated smoke",
+	          provider: "app-percy",
+	          test_type: "appium",
+	          app_uri: "bs://uploaded-app",
+          status: "draft",
+        });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "test-cases",
+          "import",
+          "--api-url",
+          "https://controller.test/test-cases",
+          "--case-id",
+          "tc-test",
+          "--workspace-id",
+          "ws-123",
+          "--name",
+          "Updated smoke",
+          "--app-file",
+          "app.ipa",
+	          "--appium-script",
+	          "appium.json",
+        ]);
+      });
+
+      assert.match(output, /App URI: bs:\/\/uploaded-app/);
+      assert.match(output, /Studio test case updated/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    assert.equal(calls.length, 4);
+    assert.equal(calls[0].url, "https://controller.test/test-apps/uploads");
+    assert.equal(calls[0].method, "POST");
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    const createBody = JSON.parse(await requestBodyText(calls[0].body)) as {
+      filename: string;
+      provider: string;
+      test_type: string;
+      size: number;
+    };
+    assert.equal(createBody.filename, "app.ipa");
+    assert.equal(createBody.provider, "app-percy");
+    assert.equal(createBody.test_type, "appium");
+    assert.equal(createBody.size, 3);
+
+    assert.equal(calls[1].url, "https://controller.test/test-apps/uploads/test-app-upload?token=upload-token");
+    assert.equal(calls[1].method, "PUT");
+    assert.equal((calls[1].headers as Record<string, string>).Authorization, "Bearer env-token");
+    assert.equal((calls[1].headers as Record<string, string>)["Content-Type"], "application/octet-stream");
+    assert.equal(Buffer.from(await requestBodyText(calls[1].body)).toString("utf8"), "ipa");
+
+    assert.equal(calls[2].url, "https://controller.test/test-apps/uploads/test-app-upload/complete?token=upload-token");
+    assert.equal(calls[2].method, "POST");
+
+    assert.equal(calls[3].url, "https://controller.test/test-cases/tc-test");
+    assert.equal(calls[3].method, "PUT");
+    const updateBody = JSON.parse(await requestBodyText(calls[3].body)) as {
+      workspace_id: string;
+      name: string;
+      provider: string;
+      test_type: string;
+      app_uri: string;
+      appium_script: string;
+    };
+    assert.equal(updateBody.workspace_id, "ws-123");
+	    assert.equal(updateBody.name, "Updated smoke");
+	    assert.equal(updateBody.provider, "app-percy");
+	    assert.equal(updateBody.test_type, "appium");
+	    assert.equal(updateBody.app_uri, "bs://uploaded-app");
+	    assert.match(updateBody.appium_script, /oasiz-appium-v1/);
+  });
+});
+
+test("test-case import reads Studio env defaults", async () => {
+  await withTempProject(async (root) => {
+    await writeFile(join(root, "recording.json"), JSON.stringify({ width: 1280, height: 720, events: [] }), "utf8");
+    await writeFile(join(root, "launch.json"), JSON.stringify({ game_id: "skyline-aces", graphics: "high" }), "utf8");
+    await writeFile(join(root, "appium.json"), '{"version":"oasiz-appium-v1","commands":[{"type":"wait","ms":500}]}', "utf8");
+    const envKeys = [
+      "OASIZ_STUDIO_API_URL",
+      "OASIZ_WORKSPACE_ID",
+      "OASIZ_TEST_CASE_NAME",
+      "OASIZ_TEST_GAME",
+      "OASIZ_TEST_DESCRIPTION",
+      "OASIZ_TEST_OBJECTIVE",
+      "OASIZ_TEST_NOTIFY_EMAILS",
+      "OASIZ_TEST_PROVIDER",
+      "OASIZ_TEST_APP_URI",
+      "OASIZ_TEST_REPLAY_PATH",
+      "OASIZ_TEST_APPIUM_PATH",
+      "OASIZ_TEST_LAUNCH_MANIFEST",
+      "APP_PERCY_DEFAULT_DEVICES",
+      "OASIZ_TEST_DRY_RUN",
+    ];
+    const previous = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      process.env.OASIZ_STUDIO_API_URL = "https://controller.test";
+      process.env.OASIZ_WORKSPACE_ID = "ws-env";
+      process.env.OASIZ_TEST_CASE_NAME = "Env smoke";
+      process.env.OASIZ_TEST_GAME = "skyline-aces";
+      process.env.OASIZ_TEST_DESCRIPTION = "from env";
+      process.env.OASIZ_TEST_OBJECTIVE = "Verify multiplayer join works.";
+      process.env.OASIZ_TEST_NOTIFY_EMAILS = "qa@example.com, dev@example.com";
+      process.env.OASIZ_TEST_PROVIDER = "app-percy";
+      process.env.OASIZ_TEST_APP_URI = "bs://env-app";
+      process.env.OASIZ_TEST_REPLAY_PATH = "recording.json";
+      process.env.OASIZ_TEST_APPIUM_PATH = "appium.json";
+      process.env.OASIZ_TEST_LAUNCH_MANIFEST = "launch.json";
+      process.env.APP_PERCY_DEFAULT_DEVICES = "iPhone 14 Pro-16,iPhone 12-15";
+      process.env.OASIZ_TEST_DRY_RUN = "true";
+
+      const output = await captureOutput(async () => {
+        await runCli(["test-case"]);
+      });
+      const body = JSON.parse(output.slice(output.indexOf("{"))) as {
+        workspace_id: string;
+        name: string;
+        game: string;
+        description: string;
+        objective: string;
+        notification_emails: string[];
+        provider: string;
+        test_type: string;
+        app_uri: string;
+        replay_script: { width: number; height: number; events: unknown[] };
+        appium_script: string;
+        launch_manifest: { game_id: string; graphics: string };
+        device_matrix: Array<{ browserstack_name: string }>;
+      };
+
+      assert.match(output, /POST https:\/\/controller\.test\/test-cases/);
+      assert.equal(body.workspace_id, "ws-env");
+      assert.equal(body.name, "Env smoke");
+      assert.equal(body.game, "skyline-aces");
+      assert.equal(body.description, "from env");
+      assert.equal(body.objective, "Verify multiplayer join works.");
+      assert.deepEqual(body.notification_emails, ["qa@example.com", "dev@example.com"]);
+      assert.equal(body.provider, "app-percy");
+      assert.equal(body.test_type, "appium");
+      assert.equal(body.app_uri, "bs://env-app");
+      assert.deepEqual(body.replay_script, { width: 1280, height: 720, events: [] });
+      assert.match(body.appium_script, /oasiz-appium-v1/);
+      assert.deepEqual(body.launch_manifest, {
+        game_id: "skyline-aces",
+        graphics: "high",
+        deep_link: "oasiz://game/skyline-aces",
+        uri: "oasiz://game/skyline-aces",
+      });
+      assert.deepEqual(body.device_matrix, [{ browserstack_name: "iPhone 14 Pro-16" }, { browserstack_name: "iPhone 12-15" }]);
+    } finally {
+      for (const key of envKeys) {
+        const value = previous.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+test("test-case run updates an existing case, auto-detects manifest, polls, and writes results", async () => {
+  await withTempProject(async (root) => {
+    await mkdir(join(root, "tests", "marble"), { recursive: true });
+    await writeFile(
+      join(root, "tests", "marble", "appium.json"),
+      '{"version":"oasiz-appium-v1","commands":[{"type":"deep_link","url":"oasiz://game/marble-madness"},{"type":"wait","ms":500}]}',
+      "utf8",
+    );
+    await writeFile(join(root, "tests", "marble", "launch-manifest.json"), '{"game_id":"marble-madness","graphics":"high"}', "utf8");
+
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousUploadToken = process.env.OASIZ_UPLOAD_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const previousArtifactDir = process.env.OASIZ_TEST_ARTIFACTS_DIR;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; body: string; headers?: HeadersInit }> = [];
+
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    delete process.env.OASIZ_UPLOAD_TOKEN;
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    process.env.OASIZ_TEST_ARTIFACTS_DIR = "run-artifacts";
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      const body = await requestBodyText(init.body);
+      calls.push({ url, method, body, headers: init.headers });
+
+      if (url === "https://controller.test/test-cases/tc-marble" && method === "PUT") {
+        return Response.json({
+          id: "tc-marble",
+          provider: "app-percy",
+          test_type: "appium",
+          app_uri: "bs://app-build",
+        });
+      }
+      if (url === "https://controller.test/test-cases/tc-marble/run" && method === "POST") {
+        return Response.json({ id: "tr-marble", status: "queued" }, { status: 201 });
+      }
+      if (url === "https://controller.test/test-runs/tr-marble" && method === "GET") {
+        return Response.json({
+          id: "tr-marble",
+          case_id: "tc-marble",
+          status: "failed",
+          outcome: "Marble Madness blank screen reproduced",
+          provider_console_url: "https://automate.browserstack.com/builds/tr-marble",
+          artifacts: [
+            {
+              label: "session",
+              kind: "session",
+              url: "https://app-automate.browserstack.com/dashboard/v2/sessions/tr-marble",
+            },
+          ],
+        });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "test-case",
+          "run",
+          "--api-url",
+          "https://controller.test",
+          "--case-id",
+          "tc-marble",
+          "--test",
+          "tests/marble/appium.json",
+          "--app-uri",
+          "bs://app-build",
+          "--objective",
+          "Verify Marble Madness reaches gameplay or fails at the game surface.",
+          "--device",
+          "iPhone 12-17",
+          "--output",
+          "run-result.json",
+          "--poll-interval-ms",
+          "1",
+          "--timeout-ms",
+          "1000",
+        ]);
+      });
+
+    assert.match(output, /Studio test run result written/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousUploadToken === undefined) delete process.env.OASIZ_UPLOAD_TOKEN;
+      else process.env.OASIZ_UPLOAD_TOKEN = previousUploadToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+      if (previousArtifactDir === undefined) delete process.env.OASIZ_TEST_ARTIFACTS_DIR;
+      else process.env.OASIZ_TEST_ARTIFACTS_DIR = previousArtifactDir;
+    }
+
+    assert.equal(calls.length, 3);
+    assert.equal(calls[0].url, "https://controller.test/test-cases/tc-marble");
+    assert.equal(calls[0].method, "PUT");
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    const updateBody = JSON.parse(calls[0].body) as {
+      workspace_id?: string;
+      provider: string;
+      test_type: string;
+      app_uri: string;
+      appium_script: string;
+      launch_manifest: { game_id: string; graphics: string };
+      device_matrix: Array<{ browserstack_name: string }>;
+    };
+    assert.equal(updateBody.workspace_id, undefined);
+    assert.equal(updateBody.provider, "app-percy");
+    assert.equal(updateBody.test_type, "appium");
+    assert.equal(updateBody.app_uri, "bs://app-build");
+    assert.match(updateBody.appium_script, /oasiz-appium-v1/);
+    assert.match(updateBody.appium_script, /oasiz:\/\/game\/marble-madness/);
+    assert.deepEqual(updateBody.launch_manifest, {
+      game_id: "marble-madness",
+      graphics: "high",
+      deep_link: "oasiz://game/marble-madness",
+      uri: "oasiz://game/marble-madness",
+    });
+    assert.deepEqual(updateBody.device_matrix, [{ browserstack_name: "iPhone 12-17" }]);
+
+    assert.equal(calls[1].url, "https://controller.test/test-cases/tc-marble/run");
+    assert.equal(calls[1].method, "POST");
+    const runBody = JSON.parse(calls[1].body) as { provider: string; test_type: string; app_uri: string };
+    assert.equal(runBody.provider, "app-percy");
+    assert.equal(runBody.test_type, "appium");
+    assert.equal(runBody.app_uri, "bs://app-build");
+
+    const result = JSON.parse(await readFile(join(root, "run-result.json"), "utf8")) as {
+      results: Array<{ case_id: string; run_id: string; status: string; outcome: string; provider_console_url: string }>;
+      output_path: string;
+    };
+    assert.equal(result.results.length, 1);
+    assert.equal(result.results[0].case_id, "tc-marble");
+    assert.equal(result.results[0].run_id, "tr-marble");
+    assert.equal(result.results[0].status, "failed");
+    assert.equal(result.results[0].outcome, "Marble Madness blank screen reproduced");
+    assert.equal(result.results[0].provider_console_url, "https://automate.browserstack.com/builds/tr-marble");
+    assert.equal(result.results[0].artifact_output_dir, join(root, "run-artifacts"));
+    assert.equal(result.output_path, join(root, "run-result.json"));
+    assert.equal(
+      await readFile(join(root, "run-artifacts", "01-session-session.url"), "utf8"),
+      "https://app-automate.browserstack.com/dashboard/v2/sessions/tr-marble\n",
+    );
+  });
+});
+
+test("test-case run dry-run supports env arrays and generated game launch manifests", async () => {
+  await withTempProject(async (root) => {
+    await mkdir(join(root, "tests"), { recursive: true });
+    await writeFile(join(root, "tests", "first.json"), '{"version":"oasiz-appium-v1","commands":[{"type":"wait","ms":100}]}', "utf8");
+    await writeFile(join(root, "tests", "second.json"), '{"version":"oasiz-appium-v1","commands":[{"type":"wait","ms":200}]}', "utf8");
+
+    const envKeys = [
+      "OASIZ_STUDIO_API_URL",
+      "OASIZ_TEST_CASE_ID",
+      "OASIZ_TEST_PATHS",
+      "OASIZ_TEST_GAME_ID",
+      "OASIZ_TEST_APP_URI",
+      "OASIZ_TEST_OBJECTIVE",
+      "APP_PERCY_DEFAULT_DEVICES",
+      "OASIZ_TEST_DRY_RUN",
+      "OASIZ_TEST_JSON",
+    ];
+    const previous = new Map(envKeys.map((key) => [key, process.env[key]]));
+
+    try {
+      process.env.OASIZ_STUDIO_API_URL = "https://controller.test/api/controller";
+      process.env.OASIZ_TEST_CASE_ID = "tc-dry";
+      process.env.OASIZ_TEST_PATHS = "tests/first.json,tests/second.json";
+      process.env.OASIZ_TEST_GAME_ID = "marble-madness";
+      process.env.OASIZ_TEST_APP_URI = "bs://app-build";
+      process.env.OASIZ_TEST_OBJECTIVE = "Verify Marble Madness reaches gameplay.";
+      process.env.APP_PERCY_DEFAULT_DEVICES = "iPhone 12-17";
+      process.env.OASIZ_TEST_DRY_RUN = "true";
+      process.env.OASIZ_TEST_JSON = "true";
+
+      const output = await captureOutput(async () => {
+        await runCli(["test-case", "run"]);
+      });
+      const result = JSON.parse(output) as {
+        results: Array<{
+          dry_run: boolean;
+          request: { import: { body: { launch_manifest: { game_id: string; uri: string } } }; run: { body: { launch_manifest: { game_id: string } } } };
+        }>;
+      };
+
+      assert.equal(result.results.length, 2);
+      assert.equal(result.results[0].dry_run, true);
+      assert.equal(result.results[0].request.import.body.launch_manifest.game_id, "marble-madness");
+      assert.equal(result.results[0].request.import.body.launch_manifest.uri, "oasiz://game/marble-madness");
+      assert.equal(result.results[0].request.import.body.launch_manifest.deep_link, "oasiz://game/marble-madness");
+      assert.equal(result.results[1].request.run.body.launch_manifest.game_id, "marble-madness");
+    } finally {
+      for (const key of envKeys) {
+        const value = previous.get(key);
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+test("test-case artifacts fetches run metadata and downloads provider artifacts", async () => {
+  await withTempProject(async (root) => {
+    const previousToken = process.env.OASIZ_CLI_TOKEN;
+    const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
+    const originalFetch = globalThis.fetch;
+    const calls: Array<{ url: string; method: string; headers?: HeadersInit }> = [];
+
+    process.env.OASIZ_CLI_TOKEN = "env-token";
+    process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
+    globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = init.method || "GET";
+      calls.push({ url, method, headers: init.headers });
+
+      if (url === "https://controller.test/test-runs/tr-artifacts" && method === "GET") {
+        return Response.json({
+          id: "tr-artifacts",
+          status: "failed",
+          outcome: "Marble Madness blank screen reproduced",
+          provider_console_url: "https://app-automate.browserstack.com/dashboard/v2/sessions/session-1",
+          artifacts: [
+            {
+              kind: "session",
+              name: "BrowserStack session",
+              url: "https://app-automate.browserstack.com/dashboard/v2/sessions/session-1",
+            },
+            {
+              kind: "video",
+              name: "BrowserStack session JSON",
+              url: "https://api.browserstack.com/app-automate/sessions/session-1.json",
+            },
+            {
+              kind: "device_logs",
+              name: "Logs",
+              url: "https://api.browserstack.com/app-automate/sessions/session-1/logs",
+            },
+          ],
+        });
+      }
+
+      if (url === "https://controller.test/test-runs/tr-artifacts/artifacts/1") {
+        return Response.json({
+          automation_session: {
+            video_url: "https://app-automate.browserstack.com/sessions/session-1/video",
+            device_logs_url: "https://api.browserstack.com/builds/build-1/sessions/session-1/devicelogs",
+            appium_logs_url: "https://api.browserstack.com/builds/build-1/sessions/session-1/appiumlogs",
+          },
+        });
+      }
+
+      if (url === "https://controller.test/test-runs/tr-artifacts/artifacts/2") {
+        return new Response("top-level log body", { headers: { "content-type": "text/plain" } });
+      }
+
+      throw new Error("Unexpected fetch: " + method + " " + url);
+    }) as typeof fetch;
+
+    try {
+      const output = await captureOutput(async () => {
+        await runCli([
+          "test-case",
+          "artifacts",
+          "--api-url",
+          "https://controller.test",
+          "--run-id",
+          "tr-artifacts",
+          "--output",
+          "artifacts/tr-artifacts",
+        ]);
+      });
+
+      assert.match(output, /Studio test run artifacts/);
+      assert.match(output, /Downloaded to:/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+      else process.env.OASIZ_CLI_TOKEN = previousToken;
+      if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
+      else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
+    }
+
+    const artifactDir = join(root, "artifacts", "tr-artifacts");
+    const runJson = JSON.parse(await readFile(join(artifactDir, "run.json"), "utf8")) as { id: string };
+    assert.equal(runJson.id, "tr-artifacts");
+    assert.equal(
+      await readFile(join(artifactDir, "01-session-browserstack-session.url"), "utf8"),
+      "https://app-automate.browserstack.com/dashboard/v2/sessions/session-1\n",
+    );
+    assert.match(await readFile(join(artifactDir, "02-video-browserstack-session-json.json"), "utf8"), /automation_session/);
+    assert.equal(
+      await readFile(join(artifactDir, "browserstack-device_logs.url"), "utf8"),
+      "https://api.browserstack.com/builds/build-1/sessions/session-1/devicelogs\n",
+    );
+    assert.equal(
+      await readFile(join(artifactDir, "browserstack-appium_logs.url"), "utf8"),
+      "https://api.browserstack.com/builds/build-1/sessions/session-1/appiumlogs\n",
+    );
+    assert.equal(await readFile(join(artifactDir, "03-device_logs-logs.txt"), "utf8"), "top-level log body");
+
+    assert.equal(calls[0].url, "https://controller.test/test-runs/tr-artifacts");
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    const proxiedSessionCall = calls.find((call) => call.url === "https://controller.test/test-runs/tr-artifacts/artifacts/1");
+    assert.ok(proxiedSessionCall);
+    assert.equal((proxiedSessionCall.headers as Record<string, string>).Authorization, "Bearer env-token");
+    const directBrowserStackCall = calls.find((call) => call.url.includes("api.browserstack.com"));
+    assert.equal(directBrowserStackCall, undefined);
+  });
+});
+
 test("getWebBaseUrl defaults to production oasiz.ai", () => {
   const originalWeb = process.env.OASIZ_WEB_URL;
   const originalApi = process.env.OASIZ_API_URL;
@@ -511,6 +1528,24 @@ test("upload CLI keeps login-based auth flow", async () => {
   assert.match(source, /await saveStoredCredentials\(/);
   assert.match(source, /if \(!token\)/);
   assert.match(source, /if \(!creatorEmail\)/);
+});
+
+test("studio CLI workflows require developer-scoped auth tokens", async () => {
+  const authPath = fileURLToPath(new URL("../src/lib/auth.ts", import.meta.url));
+  const gameServerPath = fileURLToPath(new URL("../src/game-server-cli.ts", import.meta.url));
+  const testCasePath = fileURLToPath(new URL("../src/test-case-cli.ts", import.meta.url));
+  const authSource = await readFile(authPath, "utf8");
+  const gameServerSource = await readFile(gameServerPath, "utf8");
+  const testCaseSource = await readFile(testCasePath, "utf8");
+  const studioAuthMatch = authSource.match(
+    /export async function resolveStudioAuthToken[\s\S]*?const stored = await readStoredCredentials\(\);/,
+  );
+
+  assert.ok(studioAuthMatch);
+  assert.match(studioAuthMatch[0], /OASIZ_CLI_TOKEN/);
+  assert.doesNotMatch(studioAuthMatch[0], /OASIZ_UPLOAD_TOKEN/);
+  assert.match(gameServerSource, /resolveStudioAuthToken/);
+  assert.match(testCaseSource, /resolveStudioAuthToken/);
 });
 
 test("upload dry-run reports presigned CDN upload shape", async () => {
