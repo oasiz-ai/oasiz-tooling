@@ -976,9 +976,30 @@ test("test-case import can upload an app file before updating an existing case",
       const method = init.method || "GET";
       calls.push({ url, method, body: init.body, headers: init.headers });
 
-	      if (url === "https://controller.test/test-apps/upload") {
-	        return Response.json({ provider: "app-percy", test_type: "appium", app_uri: "bs://uploaded-app" });
-	      }
+      if (url === "https://controller.test/test-apps/uploads") {
+        return Response.json({
+          id: "test-app-upload",
+          status: "pending",
+          upload_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          complete_path: "/test-apps/uploads/test-app-upload/complete?token=upload-token",
+          status_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          max_bytes: 1024,
+        });
+      }
+
+      if (url === "https://controller.test/test-apps/uploads/test-app-upload?token=upload-token") {
+        return Response.json({
+          id: "test-app-upload",
+          status: "uploaded",
+          complete_path: "/test-apps/uploads/test-app-upload/complete?token=upload-token",
+          status_path: "/test-apps/uploads/test-app-upload?token=upload-token",
+          size: 3,
+        });
+      }
+
+      if (url === "https://controller.test/test-apps/uploads/test-app-upload/complete?token=upload-token") {
+        return Response.json({ id: "test-app-upload", status: "complete", app_uri: "bs://uploaded-app" });
+      }
 
       if (url === "https://controller.test/test-cases/tc-test") {
         return Response.json({
@@ -1027,25 +1048,40 @@ test("test-case import can upload an app file before updating an existing case",
       else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
     }
 
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0].url, "https://controller.test/test-apps/upload");
+    assert.equal(calls.length, 4);
+    assert.equal(calls[0].url, "https://controller.test/test-apps/uploads");
     assert.equal(calls[0].method, "POST");
-	    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
-	    assert.ok(calls[0].body instanceof FormData);
-	    assert.equal(calls[0].body.get("provider"), "app-percy");
-	    assert.equal(calls[0].body.get("test_type"), "appium");
-	    assert.ok(calls[0].body.get("file"));
+    assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
+    const createBody = JSON.parse(await requestBodyText(calls[0].body)) as {
+      filename: string;
+      provider: string;
+      test_type: string;
+      size: number;
+    };
+    assert.equal(createBody.filename, "app.ipa");
+    assert.equal(createBody.provider, "app-percy");
+    assert.equal(createBody.test_type, "appium");
+    assert.equal(createBody.size, 3);
 
-    assert.equal(calls[1].url, "https://controller.test/test-cases/tc-test");
+    assert.equal(calls[1].url, "https://controller.test/test-apps/uploads/test-app-upload?token=upload-token");
     assert.equal(calls[1].method, "PUT");
-    const updateBody = JSON.parse(await requestBodyText(calls[1].body)) as {
+    assert.equal((calls[1].headers as Record<string, string>).Authorization, "Bearer env-token");
+    assert.equal((calls[1].headers as Record<string, string>)["Content-Type"], "application/octet-stream");
+    assert.equal(Buffer.from(await requestBodyText(calls[1].body)).toString("utf8"), "ipa");
+
+    assert.equal(calls[2].url, "https://controller.test/test-apps/uploads/test-app-upload/complete?token=upload-token");
+    assert.equal(calls[2].method, "POST");
+
+    assert.equal(calls[3].url, "https://controller.test/test-cases/tc-test");
+    assert.equal(calls[3].method, "PUT");
+    const updateBody = JSON.parse(await requestBodyText(calls[3].body)) as {
       workspace_id: string;
       name: string;
-	      provider: string;
-	      test_type: string;
-	      app_uri: string;
-	      appium_script: string;
-	    };
+      provider: string;
+      test_type: string;
+      app_uri: string;
+      appium_script: string;
+    };
     assert.equal(updateBody.workspace_id, "ws-123");
 	    assert.equal(updateBody.name, "Updated smoke");
 	    assert.equal(updateBody.provider, "app-percy");
@@ -1352,15 +1388,11 @@ test("test-case artifacts fetches run metadata and downloads provider artifacts"
   await withTempProject(async (root) => {
     const previousToken = process.env.OASIZ_CLI_TOKEN;
     const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
-    const previousUser = process.env.BROWSERSTACK_USERNAME;
-    const previousKey = process.env.BROWSERSTACK_ACCESS_KEY;
     const originalFetch = globalThis.fetch;
     const calls: Array<{ url: string; method: string; headers?: HeadersInit }> = [];
 
     process.env.OASIZ_CLI_TOKEN = "env-token";
     process.env.OASIZ_CREDENTIALS_PATH = join(root, "missing-credentials.json");
-    process.env.BROWSERSTACK_USERNAME = "bs-user";
-    process.env.BROWSERSTACK_ACCESS_KEY = "bs-key";
     globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
       const url = input instanceof Request ? input.url : String(input);
       const method = init.method || "GET";
@@ -1392,7 +1424,7 @@ test("test-case artifacts fetches run metadata and downloads provider artifacts"
         });
       }
 
-      if (url === "https://api.browserstack.com/app-automate/sessions/session-1.json") {
+      if (url === "https://controller.test/test-runs/tr-artifacts/artifacts/1") {
         return Response.json({
           automation_session: {
             video_url: "https://app-automate.browserstack.com/sessions/session-1/video",
@@ -1402,13 +1434,7 @@ test("test-case artifacts fetches run metadata and downloads provider artifacts"
         });
       }
 
-      if (url.endsWith("/devicelogs")) {
-        return new Response("device log body", { headers: { "content-type": "text/plain" } });
-      }
-      if (url.endsWith("/appiumlogs")) {
-        return new Response("appium log body", { headers: { "content-type": "text/plain" } });
-      }
-      if (url.endsWith("/logs")) {
+      if (url === "https://controller.test/test-runs/tr-artifacts/artifacts/2") {
         return new Response("top-level log body", { headers: { "content-type": "text/plain" } });
       }
 
@@ -1437,10 +1463,6 @@ test("test-case artifacts fetches run metadata and downloads provider artifacts"
       else process.env.OASIZ_CLI_TOKEN = previousToken;
       if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
       else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
-      if (previousUser === undefined) delete process.env.BROWSERSTACK_USERNAME;
-      else process.env.BROWSERSTACK_USERNAME = previousUser;
-      if (previousKey === undefined) delete process.env.BROWSERSTACK_ACCESS_KEY;
-      else process.env.BROWSERSTACK_ACCESS_KEY = previousKey;
     }
 
     const artifactDir = join(root, "artifacts", "tr-artifacts");
@@ -1451,18 +1473,23 @@ test("test-case artifacts fetches run metadata and downloads provider artifacts"
       "https://app-automate.browserstack.com/dashboard/v2/sessions/session-1\n",
     );
     assert.match(await readFile(join(artifactDir, "02-video-browserstack-session-json.json"), "utf8"), /automation_session/);
-    assert.equal(await readFile(join(artifactDir, "browserstack-device_logs.txt"), "utf8"), "device log body");
-    assert.equal(await readFile(join(artifactDir, "browserstack-appium_logs.txt"), "utf8"), "appium log body");
+    assert.equal(
+      await readFile(join(artifactDir, "browserstack-device_logs.url"), "utf8"),
+      "https://api.browserstack.com/builds/build-1/sessions/session-1/devicelogs\n",
+    );
+    assert.equal(
+      await readFile(join(artifactDir, "browserstack-appium_logs.url"), "utf8"),
+      "https://api.browserstack.com/builds/build-1/sessions/session-1/appiumlogs\n",
+    );
     assert.equal(await readFile(join(artifactDir, "03-device_logs-logs.txt"), "utf8"), "top-level log body");
 
     assert.equal(calls[0].url, "https://controller.test/test-runs/tr-artifacts");
     assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
-    const browserStackCall = calls.find((call) => call.url === "https://api.browserstack.com/app-automate/sessions/session-1.json");
-    assert.ok(browserStackCall);
-    assert.equal(
-      (browserStackCall.headers as Record<string, string>).Authorization,
-      "Basic " + Buffer.from("bs-user:bs-key").toString("base64"),
-    );
+    const proxiedSessionCall = calls.find((call) => call.url === "https://controller.test/test-runs/tr-artifacts/artifacts/1");
+    assert.ok(proxiedSessionCall);
+    assert.equal((proxiedSessionCall.headers as Record<string, string>).Authorization, "Bearer env-token");
+    const directBrowserStackCall = calls.find((call) => call.url.includes("api.browserstack.com"));
+    assert.equal(directBrowserStackCall, undefined);
   });
 });
 

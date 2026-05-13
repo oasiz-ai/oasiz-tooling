@@ -92,10 +92,17 @@ interface TestCaseResponse extends SaveTestCaseRequest {
   updated_at?: string;
 }
 
-interface AppUploadResponse {
-  provider?: string;
-  test_type?: string;
+interface TestAppUploadResponse {
+  id?: string;
+  status?: string;
+  upload_path?: string;
+  upload_url?: string;
+  complete_path?: string;
+  status_path?: string;
+  max_bytes?: number;
+  size?: number;
   app_uri?: string;
+  error?: string;
   raw?: unknown;
 }
 
@@ -593,6 +600,34 @@ async function studioRequest<T>(
   return JSON.parse(text) as T;
 }
 
+function studioEndpoint(apiBaseUrl: string, pathOrUrl: string): string {
+  if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
+  return apiBaseUrl.replace(/\/+$/, "") + (pathOrUrl.startsWith("/") ? pathOrUrl : "/" + pathOrUrl);
+}
+
+async function pollTestAppUpload(
+  apiBaseUrl: string,
+  statusPath: string,
+  timeoutMs = Number(process.env.OASIZ_TEST_APP_UPLOAD_TIMEOUT_MS || 10 * 60 * 1000),
+): Promise<TestAppUploadResponse> {
+  const started = Date.now();
+  let last: TestAppUploadResponse = {};
+  while (Date.now() - started < timeoutMs) {
+    last = await studioRequest<TestAppUploadResponse>(apiBaseUrl, statusPath);
+    const status = (last.status || "").toLowerCase();
+    if (status === "complete") return last;
+    if (status === "error" || status === "failed") {
+      throw new Error("App upload failed: " + (last.error || "provider upload failed"));
+    }
+    await sleep(2000);
+  }
+  throw new Error(
+    "Timed out waiting for app upload" +
+      (last.status ? " (last status: " + last.status + ")" : "") +
+      ". Increase OASIZ_TEST_APP_UPLOAD_TIMEOUT_MS if the provider upload is still active.",
+  );
+}
+
 async function uploadAppFile(
   apiBaseUrl: string,
   appFile: string,
@@ -602,25 +637,39 @@ async function uploadAppFile(
 ): Promise<string> {
   const filePath = resolveProjectPath(appFile);
   const bytes = await readFile(filePath);
-  const form = new FormData();
-  form.append("file", new Blob([bytes]), basename(filePath));
-  if (provider) form.append("provider", provider);
-  if (testType) form.append("test_type", testType);
-  if (customId) form.append("custom_id", customId);
+  const upload = await studioRequest<TestAppUploadResponse>(apiBaseUrl, "/test-apps/uploads", {
+    method: "POST",
+    body: {
+      filename: basename(filePath),
+      content_type: "application/octet-stream",
+      provider,
+      test_type: testType,
+      custom_id: customId,
+      size: bytes.length,
+    },
+  });
+  const uploadPath = upload.upload_path || upload.upload_url;
+  if (!uploadPath) {
+    throw new Error("Studio app upload target did not include upload_path.");
+  }
+  if (upload.max_bytes && bytes.length > upload.max_bytes) {
+    throw new Error("App file exceeds Studio upload max_bytes (" + upload.max_bytes + ").");
+  }
 
-  const requestUrl = apiBaseUrl + "/test-apps/upload";
+  const requestUrl = studioEndpoint(apiBaseUrl, uploadPath);
   const headers: Record<string, string> = {};
   const token = await resolveStudioAuthToken();
   if (token) {
     headers.Authorization = "Bearer " + token;
   }
+  headers["Content-Type"] = "application/octet-stream";
 
   let response: Response;
   try {
     response = await fetch(requestUrl, {
-      method: "POST",
+      method: "PUT",
       headers,
-      body: form,
+      body: bytes,
     });
   } catch (error) {
     const details = error instanceof Error ? error.message : String(error);
@@ -630,15 +679,23 @@ async function uploadAppFile(
   const text = await response.text();
   if (!response.ok) {
     throw new Error(
-      "App file upload failed (" + response.status + ") for " + requestUrl + ". Response preview: " + summarizeErrorBody(text),
+        "App file upload failed (" + response.status + ") for " + requestUrl + ". Response preview: " + summarizeErrorBody(text),
     );
   }
 
-  const parsed = text.trim() ? (JSON.parse(text) as AppUploadResponse) : {};
-  if (!parsed.app_uri) {
+  const uploaded = text.trim() ? (JSON.parse(text) as TestAppUploadResponse) : {};
+  const completePath = uploaded.complete_path || upload.complete_path;
+  const statusPath = uploaded.status_path || upload.status_path;
+  if (!completePath || !statusPath) {
+    throw new Error("Studio app upload target did not include complete_path and status_path.");
+  }
+
+  const completed = await studioRequest<TestAppUploadResponse>(apiBaseUrl, completePath, { method: "POST", body: {} });
+  const final = completed.app_uri ? completed : await pollTestAppUpload(apiBaseUrl, statusPath);
+  if (!final.app_uri) {
     throw new Error("App upload response did not include app_uri.");
   }
-  return parsed.app_uri;
+  return final.app_uri;
 }
 
 async function buildImportOptions(parsed: ParsedArgs): Promise<ImportOptions> {
@@ -900,14 +957,6 @@ function artifactBaseName(artifact: TestArtifact, index: number): string {
   return number + "-" + sanitizeFileSegment(rawName);
 }
 
-function browserStackAuthHeader(url: string): string | undefined {
-  if (!isBrowserStackApiUrl(url)) return undefined;
-  const username = process.env.BROWSERSTACK_USERNAME?.trim();
-  const accessKey = process.env.BROWSERSTACK_ACCESS_KEY?.trim();
-  if (!username || !accessKey) return undefined;
-  return "Basic " + Buffer.from(username + ":" + accessKey).toString("base64");
-}
-
 function isBrowserStackApiUrl(url: string): boolean {
   let hostname = "";
   try {
@@ -935,19 +984,18 @@ function artifactExtension(url: string, contentType: string): string {
   return ".bin";
 }
 
-async function fetchArtifactBytes(url: string): Promise<{ bytes: Buffer; contentType: string }> {
+async function fetchArtifactBytes(url: string, useStudioAuth = false): Promise<{ bytes: Buffer; contentType: string }> {
   const headers: Record<string, string> = {};
-  const auth = browserStackAuthHeader(url);
-  if (auth) headers.Authorization = auth;
+  if (useStudioAuth) {
+    const token = await resolveStudioAuthToken();
+    if (token) headers.Authorization = "Bearer " + token;
+  }
 
   const response = await fetch(url, { headers });
   const bytes = Buffer.from(await response.arrayBuffer());
   if (!response.ok) {
     const preview = bytes.toString("utf8", 0, Math.min(bytes.length, 240)).replace(/\s+/g, " ").trim();
-    const credentialHint = isBrowserStackApiUrl(url) && !auth
-      ? " Set BROWSERSTACK_USERNAME and BROWSERSTACK_ACCESS_KEY to download BrowserStack artifacts."
-      : "";
-    throw new Error("Artifact download failed (" + response.status + ") for " + url + ". " + preview + credentialHint);
+    throw new Error("Artifact download failed (" + response.status + ") for " + url + ". " + preview);
   }
   return { bytes, contentType: response.headers.get("content-type") || "" };
 }
@@ -969,6 +1017,8 @@ async function downloadUrlArtifact(
   baseName: string,
   artifact: TestArtifact,
   index: number,
+  apiBaseUrl: string,
+  runId?: string,
 ): Promise<DownloadedArtifact[]> {
   if (!artifact.url) return [];
   if ((artifact.kind || "").toLowerCase() === "session" || artifact.url.includes("/dashboard/")) {
@@ -976,7 +1026,13 @@ async function downloadUrlArtifact(
     return link ? [link] : [];
   }
 
-  const { bytes, contentType } = await fetchArtifactBytes(artifact.url);
+  const providerURL = artifact.url;
+  const downloadURL =
+    runId && isBrowserStackApiUrl(providerURL)
+      ? studioEndpoint(apiBaseUrl, "/test-runs/" + encodeURIComponent(runId) + "/artifacts/" + encodeURIComponent(String(index)))
+      : studioEndpoint(apiBaseUrl, providerURL);
+  const useStudioAuth = downloadURL !== providerURL || !/^https?:\/\//i.test(providerURL);
+  const { bytes, contentType } = await fetchArtifactBytes(downloadURL, useStudioAuth);
   const extension = artifactExtension(artifact.url, contentType);
   const path = join(outputDir, baseName + extension);
   await writeFile(path, bytes);
@@ -1056,9 +1112,14 @@ async function downloadBrowserStackSessionArtifacts(outputDir: string, bytes: Bu
       if (link) downloaded.push(link);
       continue;
     }
+    if (nested.url && isBrowserStackApiUrl(nested.url)) {
+      const link = await writeUrlArtifact(outputDir, "browserstack-" + sanitizeFileSegment(nested.kind || String(index + 1)), nested);
+      if (link) downloaded.push(link);
+      continue;
+    }
     const baseName = "browserstack-" + sanitizeFileSegment(nested.kind || String(index + 1));
     try {
-      downloaded.push(...(await downloadUrlArtifact(outputDir, baseName, nested, index)));
+      downloaded.push(...(await downloadUrlArtifact(outputDir, baseName, nested, index, "")));
     } catch (error) {
       downloaded.push(await writeArtifactError(outputDir, baseName, nested, index, error));
     }
@@ -1066,7 +1127,7 @@ async function downloadBrowserStackSessionArtifacts(outputDir: string, bytes: Bu
   return downloaded;
 }
 
-async function downloadRunArtifacts(run: TestRunResponse, outputDir: string): Promise<DownloadedArtifact[]> {
+async function downloadRunArtifacts(run: TestRunResponse, outputDir: string, apiBaseUrl: string): Promise<DownloadedArtifact[]> {
   const resolvedOutputDir = resolveProjectPath(outputDir);
   await mkdir(resolvedOutputDir, { recursive: true });
   await writeFile(join(resolvedOutputDir, "run.json"), JSON.stringify(run, null, 2) + "\n", "utf8");
@@ -1077,7 +1138,7 @@ async function downloadRunArtifacts(run: TestRunResponse, outputDir: string): Pr
     if (!artifact?.url) continue;
     const baseName = artifactBaseName(artifact, index);
     try {
-      downloaded.push(...(await downloadUrlArtifact(resolvedOutputDir, baseName, artifact, index)));
+      downloaded.push(...(await downloadUrlArtifact(resolvedOutputDir, baseName, artifact, index, apiBaseUrl, run.id)));
     } catch (error) {
       downloaded.push(await writeArtifactError(resolvedOutputDir, baseName, artifact, index, error));
     }
@@ -1234,7 +1295,7 @@ async function commandRun(argv: string[]): Promise<void> {
         ? join(artifactOutputDir, finalRun.id || createdRun.id || "run")
         : artifactOutputDir;
     const downloadedArtifacts = resolvedArtifactOutputDir
-      ? await downloadRunArtifacts(finalRun, resolvedArtifactOutputDir)
+      ? await downloadRunArtifacts(finalRun, resolvedArtifactOutputDir, options.apiBaseUrl)
       : undefined;
     results.push({
       test_path: testPath ? resolveProjectPath(testPath) : undefined,
@@ -1286,7 +1347,7 @@ async function commandArtifacts(argv: string[]): Promise<void> {
   ])?.trim();
   const json = flagOrEnvBoolean(parsed, ["--json"], ["OASIZ_TEST_JSON", "OASIZ_CLI_JSON"]);
   const run = await studioRequest<TestRunResponse>(apiBaseUrl, "/test-runs/" + encodeURIComponent(runId));
-  const downloaded = outputDir ? await downloadRunArtifacts(run, outputDir) : [];
+  const downloaded = outputDir ? await downloadRunArtifacts(run, outputDir, apiBaseUrl) : [];
   const payload = {
     run,
     artifacts: run.artifacts || [],
