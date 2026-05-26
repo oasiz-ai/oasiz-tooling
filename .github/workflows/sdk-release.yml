@@ -11,9 +11,9 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  npm:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    name: Release SDK
+    name: Release JS SDK to npm
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -54,9 +55,58 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Semantic release
+      - name: Publish JS SDK to npm
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm exec --workspace @oasiz/sdk semantic-release
+        run: node scripts/publish-npm-workspace.mjs packages/sdk
+
+  unity-r2:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    name: Release Unity SDK to R2
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify R2 publish config
+        shell: bash
+        env:
+          R2_BUCKET_URL: ${{ secrets.R2_BUCKET_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_CUSTOM_DOMAIN: ${{ secrets.R2_CUSTOM_DOMAIN }}
+        run: |
+          set -euo pipefail
+
+          for name in R2_BUCKET_URL R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_CUSTOM_DOMAIN; do
+            if [ -z "${!name:-}" ]; then
+              echo "$name is not configured for this workflow." >&2
+              exit 1
+            fi
+          done
+
+          echo "R2 custom domain: $R2_CUSTOM_DOMAIN"
+
+      - name: Upload Unity SDK to R2
+        env:
+          R2_BUCKET_URL: ${{ secrets.R2_BUCKET_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_CUSTOM_DOMAIN: ${{ secrets.R2_CUSTOM_DOMAIN }}
+        run: bun run scripts/upload-unity-sdk.ts ./packages/OasizSDK
