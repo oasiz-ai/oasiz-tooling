@@ -18,30 +18,15 @@ export interface BrowserLoginResult {
   expiresAt?: string;
 }
 
-const DEFAULT_API_BASE = "http://localhost:3001";
+const DEFAULT_API_BASE = "https://www.oasiz.gg";
 const DEFAULT_WEB_BASE = "https://oasiz.ai";
-
-function normalizeApiBase(raw: string): string {
-  let value = raw.trim();
-  if (!value) return DEFAULT_API_BASE;
-
-  if (value.endsWith("/api/upload/game")) {
-    value = value.slice(0, -"/api/upload/game".length);
-  } else if (value.endsWith("/api")) {
-    value = value.slice(0, -"/api".length);
-  }
-
-  return value.replace(/\/+$/, "");
-}
 
 function getWorkspaceCredentialsPath(): string {
   return join(getProjectRoot(), ".oasiz", "credentials.json");
 }
 
 export function getApiBaseUrl(): string {
-  const raw = process.env.OASIZ_API_URL || "";
-  if (!raw) return DEFAULT_API_BASE;
-  return normalizeApiBase(raw);
+  return DEFAULT_API_BASE;
 }
 
 export function getApiUrl(path: string): string {
@@ -50,22 +35,6 @@ export function getApiUrl(path: string): string {
 }
 
 export function getWebBaseUrl(): string {
-  const explicit = process.env.OASIZ_WEB_URL;
-  if (explicit && explicit.trim()) {
-    return explicit.replace(/\/+$/, "");
-  }
-
-  const explicitApi = process.env.OASIZ_API_URL;
-  if (explicitApi && explicitApi.trim()) {
-    const apiBase = normalizeApiBase(explicitApi);
-    if (apiBase.startsWith("https://api.")) {
-      return apiBase.replace("https://api.", "https://");
-    }
-    if (apiBase.startsWith("http://api.")) {
-      return apiBase.replace("http://api.", "http://");
-    }
-  }
-
   return DEFAULT_WEB_BASE;
 }
 

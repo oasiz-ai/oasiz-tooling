@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import { getApiUrl, readStoredCredentials, resolveAuthToken, runBrowserLoginFlow, saveStoredCredentials } from "./lib/auth.ts";
-import { type PublishConfig, writePublishConfig } from "./lib/game.ts";
+import { type GameOrientation, type PublishConfig, type WebGameEngine, writePublishConfig } from "./lib/game.ts";
 import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
 const MAX_UPLOAD_ASSET_SIZE_MB = 100;
@@ -57,13 +57,15 @@ interface UploadPayload {
   category: string;
   email: string;
   gameId?: string;
+  isPublic?: boolean;
   isMultiplayer?: boolean;
   maxPlayers?: number;
   verticalOnly?: boolean;
   thumbnailBase64?: string;
   bundleHtml: string;
+  bundleVersion: string;
   assets?: AssetEntry[];
-  runtimeManifest?: UploadRuntimeManifest;
+  runtimeManifest: UploadRuntimeManifest;
 }
 
 function loadEnvSync(): void {
@@ -211,6 +213,10 @@ function getMimeType(filePath: string): string {
     ".webm": "video/webm",
     ".wasm": "application/wasm",
     ".json": "application/json",
+    ".data": "application/octet-stream",
+    ".mem": "application/octet-stream",
+    ".glb": "model/gltf-binary",
+    ".gltf": "model/gltf+json",
     ".woff": "font/woff",
     ".woff2": "font/woff2",
     ".ttf": "font/ttf",
@@ -250,9 +256,8 @@ function buildUploadedGameAssetR2Key(params: {
   return `game-assets/${params.gameId}/${params.path}`;
 }
 
-function getRuntimeOrientation(verticalOnly: boolean | undefined): "portrait" | "landscape" | "any" {
+function getRuntimeOrientation(verticalOnly: boolean | undefined): GameOrientation {
   if (verticalOnly === true) return "portrait";
-  if (verticalOnly === false) return "landscape";
   return "any";
 }
 
@@ -260,35 +265,94 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function buildUploadRuntimeManifest(params: {
-  isUnity: boolean;
-  publishConfig: PublishConfig;
-  verticalOnly: boolean | undefined;
-}): UploadRuntimeManifest | undefined {
-  if (isRecord(params.publishConfig.runtimeManifest)) {
-    return {
-      ...params.publishConfig.runtimeManifest,
-      ...(params.verticalOnly !== undefined
-        ? { orientation: getRuntimeOrientation(params.verticalOnly) }
-        : {}),
+function detectWebGameEngine(gamePath: string, isUnity: boolean, publishConfig: PublishConfig): WebGameEngine {
+  if (publishConfig.engine) return publishConfig.engine;
+  if (isUnity) return "unity-webgl";
+
+  const packageJsonPath = join(gamePath, "package.json");
+  if (!existsSync(packageJsonPath)) return "html";
+
+  try {
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+      dependencies?: Record<string, unknown>;
+      devDependencies?: Record<string, unknown>;
     };
+    const deps = {
+      ...(packageJson.dependencies ?? {}),
+      ...(packageJson.devDependencies ?? {}),
+    };
+    const names = new Set(Object.keys(deps));
+    if (names.has("phaser")) return "phaser";
+    if (names.has("pixi.js") || names.has("pixi") || [...names].some((name) => name.startsWith("@pixi/"))) {
+      return "pixi";
+    }
+    if (names.has("three") || [...names].some((name) => name.startsWith("@react-three/"))) {
+      return "three";
+    }
+  } catch {
+    return "html";
   }
 
-  if (!params.isUnity) {
-    return undefined;
-  }
+  return "html";
+}
+
+function getUploadRuntimeOrientation(params: {
+  publishConfig: PublishConfig;
+  verticalOnly: boolean | undefined;
+}): GameOrientation {
+  return params.publishConfig.orientation ?? getRuntimeOrientation(params.verticalOnly);
+}
+
+function buildGeneratedRuntimeManifest(params: {
+  engine: WebGameEngine;
+  orientation: GameOrientation;
+}): UploadRuntimeManifest {
+  const requiresWebGL = params.engine === "unity-webgl" || params.engine === "three";
 
   return {
     artifactSchemaVersion: 1,
     runtime: "web",
-    engine: "unity-webgl",
+    engine: params.engine,
     entry: "index.html",
-    orientation: getRuntimeOrientation(params.verticalOnly),
-    sdkVersion: "oasiz-cli@1.1.5",
-    requiresWebGL: true,
-    memoryTier: "high",
+    orientation: params.orientation,
+    sdkVersion: "oasiz-cli@1.1.7",
+    ...(requiresWebGL && { requiresWebGL: true }),
+    ...(params.engine === "unity-webgl" && {
+      memoryTier: "high",
+      recommendedDpr: 1,
+    }),
+    ...(params.engine === "three" && {
+      memoryTier: "medium",
+      recommendedDpr: 1.5,
+    }),
     capabilities: ["score", "saveState", "haptics", "share"],
   };
+}
+
+function buildUploadRuntimeManifest(params: {
+  gamePath: string;
+  isUnity: boolean;
+  publishConfig: PublishConfig;
+  verticalOnly: boolean | undefined;
+}): UploadRuntimeManifest {
+  const engine = detectWebGameEngine(params.gamePath, params.isUnity, params.publishConfig);
+  const orientation = getUploadRuntimeOrientation({
+    publishConfig: params.publishConfig,
+    verticalOnly: params.verticalOnly,
+  });
+  const generatedManifest = buildGeneratedRuntimeManifest({ engine, orientation });
+
+  if (isRecord(params.publishConfig.runtimeManifest)) {
+    return {
+      ...generatedManifest,
+      ...params.publishConfig.runtimeManifest,
+      ...(params.verticalOnly !== undefined || params.publishConfig.orientation
+        ? { orientation }
+        : {}),
+    };
+  }
+
+  return generatedManifest;
 }
 
 function resolveGamePath(gameFolder: string): { gamePath: string; isUnity: boolean } {
@@ -336,9 +400,12 @@ async function readUploadPublishConfig(gamePath: string): Promise<PublishConfig>
     title: config.title || defaultConfig.title,
     description: config.description || defaultConfig.description,
     category: config.category || defaultConfig.category,
+    engine: config.engine,
     gameId: config.gameId,
+    isPublic: typeof config.isPublic === "boolean" ? config.isPublic : undefined,
     isMultiplayer: config.isMultiplayer,
     maxPlayers: config.maxPlayers,
+    orientation: config.orientation,
     runtimeManifest: isRecord(config.runtimeManifest)
       ? config.runtimeManifest
       : undefined,
@@ -1508,12 +1575,21 @@ function applyJsonJsAssetUrlRewrites(assetPath: string, assetBuffer: Buffer, ass
   return assetBuffer;
 }
 
-async function uploadFileToR2(signedUrl: string, buffer: Buffer, contentType: string, path: string): Promise<void> {
+async function uploadFileToR2(
+  signedUrl: string,
+  buffer: Buffer,
+  contentType: string,
+  path: string,
+  contentEncoding?: "br" | "gzip",
+): Promise<void> {
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(signedUrl, {
         method: "PUT",
-        headers: { "Content-Type": contentType },
+        headers: {
+          "Content-Type": contentType,
+          ...(contentEncoding && { "Content-Encoding": contentEncoding }),
+        },
         body: buffer,
       });
       if (response.ok) return;
@@ -1561,6 +1637,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       description: payload.description,
       category: payload.category,
       gameId: payload.gameId,
+      ...(typeof payload.isPublic === "boolean" ? { isPublic: payload.isPublic } : {}),
       isMultiplayer: payload.isMultiplayer,
       maxPlayers: payload.maxPlayers,
       runtimeManifest: payload.runtimeManifest,
@@ -1585,7 +1662,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
   const assets = payload.assets ?? [];
   const allAssetPaths = assets.map((asset) => asset.path);
   let assetFiles: RuntimeAssetFilePayload[] | undefined;
-  let bundleVersion: string | undefined;
+  let bundleVersion = payload.bundleVersion;
 
   if (assets.length > 0) {
     const totalSize = assets.reduce((sum, asset) => sum + asset.buffer.length, 0);
@@ -1596,6 +1673,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       method: "POST",
       headers: uploadAuthHeaders(token),
       body: JSON.stringify({
+        bundleVersion,
         assets: assets.map((asset) => ({
           path: asset.path,
           contentType: asset.contentType,
@@ -1621,7 +1699,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       urls: Record<string, string>;
     };
     const { cdnBaseUrl, urls: signedUrls } = presignResult;
-    bundleVersion = presignResult.bundleVersion;
+    bundleVersion = presignResult.bundleVersion ?? bundleVersion;
     logSuccess(`Got ${Object.keys(signedUrls).length} signed URLs (${((Date.now() - presignStart) / 1000).toFixed(1)}s)`);
 
     const cdnUrlMap: Record<string, string> = {};
@@ -1651,7 +1729,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
         throw new Error(`No signed URL for ${asset.path}`);
       }
       const buffer = assetBuffers.get(asset.path) ?? asset.buffer;
-      await uploadFileToR2(signedUrl, buffer, asset.contentType, asset.path);
+      await uploadFileToR2(signedUrl, buffer, asset.contentType, asset.path, asset.contentEncoding);
       uploaded += 1;
       if (uploaded % 5 === 0 || uploaded === assets.length) {
         logInfo(`  ${uploaded}/${assets.length} assets uploaded...`);
@@ -1788,12 +1866,13 @@ export function printUploadHelp(): void {
   console.log("  horizontal     Upload as landscape-friendly (verticalOnly=false)");
   console.log("  vertical       Upload as portrait-locked (verticalOnly=true, default)");
   console.log("  new            Upload as a new game (ignore existing gameId)");
+  console.log("  --public       Upload with isPublic=true");
   console.log("  --list, -l     List available game folders");
   console.log("  --skip-build   Skip the build step (use existing dist/)");
   console.log("  --dry-run      Build but don't upload (test mode)");
   console.log("  --inline       Inline all assets into HTML (legacy mode)");
   console.log("  --withlog      Inject on-page preboot log overlay into uploaded HTML");
-  console.log("  --activate     Activate uploaded draft if the API returns a draftId");
+  console.log("  --activate     Publish the uploaded game/version live");
   console.log("  --help, -h     Show this help message");
   console.log("");
   console.log("By default, assets are uploaded via presigned URLs for CDN delivery.");
@@ -1806,6 +1885,7 @@ export function printUploadHelp(): void {
   console.log("");
   console.log("Examples:");
   console.log("  oasiz upload block-blast");
+  console.log("  oasiz upload block-blast --public");
   console.log("  oasiz upload block-blast horizontal");
   console.log("  oasiz upload two-dots --skip-build");
   console.log("  oasiz upload endless-hexagon --inline");
@@ -1822,6 +1902,7 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
   const useInlining = args.includes("--inline");
   const unityInjectPrebootLogger = args.includes("--withlog");
   const uploadAsNew = args.includes("new");
+  const makePublic = args.includes("--public");
   const forceActivate = args.includes("--activate");
   const orientationOverride = args.includes("horizontal") ? false : args.includes("vertical") ? true : undefined;
 
@@ -1868,11 +1949,17 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
 
   const thumbnailBase64 = await readThumbnail(gamePath);
   const verticalOnly = orientationOverride ?? publishConfig.verticalOnly;
+  const isPublic = makePublic ? true : publishConfig.isPublic;
   const runtimeManifest = buildUploadRuntimeManifest({
+    gamePath,
     isUnity,
     publishConfig,
     verticalOnly,
   });
+  const bundleVersion = String(Date.now());
+  logInfo(
+    `Runtime lane: ${String(runtimeManifest.engine ?? "html")} (bundleVersion=${bundleVersion}, orientation=${String(runtimeManifest.orientation ?? "any")})`,
+  );
   const payload: UploadPayload = {
     title: publishConfig.title,
     slug: gameSlug,
@@ -1880,13 +1967,15 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     category: publishConfig.category,
     email: auth?.creatorEmail || "",
     gameId: uploadAsNew ? undefined : publishConfig.gameId,
+    isPublic,
     isMultiplayer: publishConfig.isMultiplayer,
     maxPlayers: publishConfig.maxPlayers,
     verticalOnly,
     thumbnailBase64,
     bundleHtml,
+    bundleVersion,
     ...(assets ? { assets } : {}),
-    ...(runtimeManifest ? { runtimeManifest } : {}),
+    runtimeManifest,
   };
 
   if (dryRun) {
@@ -1899,12 +1988,12 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     console.log(`  Description: ${payload.description}`);
     console.log(`  Creator Email: ${payload.email || "(from login at runtime)"}`);
     console.log(`  Has Thumbnail: ${Boolean(payload.thumbnailBase64)}`);
+    console.log(`  Public: ${payload.isPublic === true ? "true" : payload.isPublic === false ? "false" : "false (default)"}`);
     console.log(`  Vertical Only: ${payload.verticalOnly ?? true} (default: true)`);
-    if (payload.runtimeManifest) {
-      console.log(
-        `  Runtime Manifest: ${String(payload.runtimeManifest.runtime ?? "web")}/${String(payload.runtimeManifest.engine ?? "html")}`,
-      );
-    }
+    console.log(
+      `  Runtime Manifest: ${String(payload.runtimeManifest.runtime ?? "web")}/${String(payload.runtimeManifest.engine ?? "html")}`,
+    );
+    console.log(`  Bundle Version: ${payload.bundleVersion}`);
     console.log(`  Bundle Size: ${(payload.bundleHtml.length / 1024).toFixed(1)} KB`);
     console.log(`  Type: ${isUnity ? "Unity WebGL" : useInlining ? "Inline (legacy)" : "CDN Assets (presigned)"}`);
     if (assets) {
@@ -1925,24 +2014,25 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     logSuccess("Saved gameId to publish.json");
   }
 
-  if (forceActivate && result.draftId) {
-    const activateUrl = getApiUrl("/api/upload/activate");
-    logInfo(`Activating uploaded draft via ${activateUrl}...`);
+  if (forceActivate && result.gameId) {
+    const versionId = result.draftId || result.gameId;
+    const activateUrl = getApiUrl("/api/games/" + encodeURIComponent(result.gameId) + "/publish-live");
+    logInfo(`Publishing uploaded version via ${activateUrl}...`);
     const response = await fetch(activateUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${auth!.token}`,
       },
-      body: JSON.stringify({ draftId: result.draftId }),
+      body: JSON.stringify({ versionId }),
     });
 
     if (!response.ok) {
-      throw new Error(`Activation failed (${response.status}): ${await response.text()}`);
+      throw new Error(`Publish-live failed (${response.status}): ${await response.text()}`);
     }
-    logSuccess("Activated uploaded draft");
+    logSuccess("Published uploaded version live");
   } else if (forceActivate) {
-    logInfo("Upload succeeded, but the API did not return a draftId to activate");
+    logInfo("Upload succeeded, but the API did not return a gameId to publish live");
   }
 }
 

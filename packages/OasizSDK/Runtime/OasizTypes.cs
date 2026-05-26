@@ -42,6 +42,55 @@ namespace Oasiz
     Error,
   }
 
+  /// <summary>
+  /// Suggested graphics/rendering tier for the current device.
+  /// </summary>
+  public enum GraphicsPerformanceTier
+  {
+    Minimal,
+    Low,
+    Medium,
+    High,
+  }
+
+  /// <summary>
+  /// Device graphics performance recommendation returned by
+  /// <see cref="OasizSDK.GetGraphicsPerformance"/>.
+  /// <see cref="fps"/> is the recommended frame-rate target, and
+  /// <see cref="tier"/> is one of <c>minimal</c>, <c>low</c>, <c>medium</c>,
+  /// or <c>high</c>.
+  /// </summary>
+  [Serializable]
+  public struct GraphicsPerformanceMetric
+  {
+    public int fps;
+    public string tier;
+
+    public GraphicsPerformanceMetric(int fps, string tier)
+    {
+      this.fps = fps;
+      this.tier = tier;
+    }
+
+    public GraphicsPerformanceTier Tier
+    {
+      get
+      {
+        switch ((tier ?? string.Empty).Trim().ToLowerInvariant())
+        {
+          case "high":
+            return GraphicsPerformanceTier.High;
+          case "low":
+            return GraphicsPerformanceTier.Low;
+          case "minimal":
+            return GraphicsPerformanceTier.Minimal;
+          default:
+            return GraphicsPerformanceTier.Medium;
+        }
+      }
+    }
+  }
+
   [Serializable]
   public struct ScoreAnchor
   {

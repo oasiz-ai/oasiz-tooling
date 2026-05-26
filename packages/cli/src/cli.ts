@@ -16,8 +16,8 @@ import {
 } from "./lib/auth.ts";
 import {
   getMyGames,
-  getUploadPreflight,
-  postActivateDraft,
+  postPublishLive,
+  type MyGameItem,
   type StudioDraft,
 } from "./lib/api.ts";
 import { runGameServerCli } from "./game-server-cli.ts";
@@ -56,7 +56,8 @@ function printHelp(): void {
   console.log("");
   console.log("Upload flags:");
   console.log("  new                         Upload as a new game");
-  console.log("  --activate                  Activate uploaded draft if supported");
+  console.log("  --public                    Upload with isPublic=true");
+  console.log("  --activate                  Publish the uploaded game/version live");
   console.log("  --skip-build                Skip build step and use dist/");
   console.log("  --dry-run                   Build but do not upload");
   console.log("  --inline                    Inline all assets into HTML");
@@ -88,12 +89,7 @@ function enrichConnectionError(error: unknown, message: string): string {
     lines.push("API base: " + getApiBaseUrl());
   }
 
-  if (!process.env.OASIZ_API_URL) {
-    lines.push("Hint: OASIZ_API_URL is not set.");
-    lines.push("Set it for local backend, e.g. `export OASIZ_API_URL=http://localhost:3001`.");
-  } else {
-    lines.push("Hint: verify OASIZ_API_URL points to a reachable backend.");
-  }
+  lines.push("Hint: the public CLI always targets the production Oasiz API.");
 
   return lines.join("\n");
 }
@@ -618,6 +614,60 @@ async function resolveGameTitle(gameArg: string): Promise<string> {
   return slugToTitle(gameArg);
 }
 
+function normalizeTitleKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function getGameTimestamp(game: MyGameItem): string {
+  return game.createdAt || game.updatedAt || "";
+}
+
+function resolvePlatformGame(
+  games: MyGameItem[],
+  gameArg: string,
+  title: string,
+): { root: MyGameItem; drafts: StudioDraft[] } | null {
+  const normalizedArg = normalizeTitleKey(gameArg);
+  const normalizedTitle = normalizeTitleKey(title);
+  const roots = games.filter((game) => !game.rootGameId);
+
+  let root =
+    roots.find((game) => game.id === gameArg) ||
+    roots.find((game) => normalizeTitleKey(game.title) === normalizedTitle) ||
+    roots.find((game) => normalizeTitleKey(game.title) === normalizedArg);
+
+  if (!root) {
+    const version = games.find(
+      (game) =>
+        game.id === gameArg ||
+        normalizeTitleKey(game.title) === normalizedTitle ||
+        normalizeTitleKey(game.title) === normalizedArg,
+    );
+    if (version?.rootGameId) {
+      root = games.find((game) => game.id === version.rootGameId);
+    } else if (version && !version.rootGameId) {
+      root = version;
+    }
+  }
+
+  if (!root) return null;
+
+  const versionRows = games
+    .filter((game) => game.id === root.id || game.rootGameId === root.id)
+    .sort((a, b) => getGameTimestamp(a).localeCompare(getGameTimestamp(b)));
+  const rows = versionRows.length > 0 ? versionRows : [root];
+  const liveVersionId = root.activeVersionId || root.id;
+  const drafts = rows.map((game, index) => ({
+    id: game.id,
+    label: "v" + (index + 1),
+    createdAt: getGameTimestamp(game),
+    isLive: game.id === liveVersionId,
+    isPublic: Boolean(game.isPublic),
+  }));
+
+  return { root, drafts };
+}
+
 async function commandUpload(gameSlug: string, argv: string[]): Promise<void> {
   await runUploadCommand(gameSlug, argv);
 }
@@ -625,43 +675,46 @@ async function commandUpload(gameSlug: string, argv: string[]): Promise<void> {
 async function commandVersions(gameArg: string): Promise<void> {
   const token = await requireAuthToken();
   const title = await resolveGameTitle(gameArg);
-  const preflight = await getUploadPreflight(title, token);
+  const games = await getMyGames(token, { includeVersions: true, limit: 100 });
+  const resolved = resolvePlatformGame(games, gameArg, title);
 
-  if (!preflight.game) {
+  if (!resolved) {
     console.log("No game found for title: " + title);
     return;
   }
 
-  const drafts = sortDraftsAscending(preflight.drafts || []);
-  const gameUrl = getWebBaseUrl() + "/games/" + preflight.game.id;
+  const drafts = sortDraftsAscending(resolved.drafts);
+  const gameUrl = getWebBaseUrl() + "/games/" + resolved.root.id;
   console.log("");
-  console.log(preflight.game.title + " - " + gameUrl);
+  console.log(resolved.root.title + " - " + gameUrl);
   console.log("");
-  console.log(pad("Label", 8) + pad("Uploaded", 20) + "Live");
+  console.log(pad("Version", 10) + pad("Uploaded", 20) + pad("Public", 8) + "Live");
   for (const draft of drafts) {
-    const live = draft.isLive ? "✓ (currently live)" : "";
-    console.log(pad(draft.label, 8) + pad(formatRelativeTime(draft.createdAt), 20) + live);
+    const live = draft.isLive ? "yes" : "";
+    const publicState = draft.isPublic ? "yes" : "no";
+    console.log(pad(draft.label, 10) + pad(formatRelativeTime(draft.createdAt), 20) + pad(publicState, 8) + live);
   }
 }
 
 async function commandActivate(gameArg: string): Promise<void> {
   const token = await requireAuthToken();
   const title = await resolveGameTitle(gameArg);
-  const preflight = await getUploadPreflight(title, token);
+  const games = await getMyGames(token, { includeVersions: true, limit: 100 });
+  const resolved = resolvePlatformGame(games, gameArg, title);
 
-  if (!preflight.game) {
+  if (!resolved) {
     fail("No canonical game found for " + title + ".");
   }
-  if (!preflight.drafts || preflight.drafts.length === 0) {
+  if (!resolved.drafts || resolved.drafts.length === 0) {
     fail("No drafts found for " + title + ".");
   }
 
-  const drafts = sortDraftsDescending(preflight.drafts);
+  const drafts = sortDraftsDescending(resolved.drafts);
   const liveDraft = getLiveDraft(drafts);
 
   console.log("");
   console.log(
-    preflight.game.title +
+    resolved.root.title +
       " - " +
       drafts.length +
       " versions, " +
@@ -684,27 +737,26 @@ async function commandActivate(gameArg: string): Promise<void> {
   }
 
   const selected = drafts[choice - 1];
-  await postActivateDraft(selected.id, token);
-  console.log("Activated " + selected.label + ".");
+  await postPublishLive(resolved.root.id, selected.id, token);
+  console.log("Activated " + selected.label + " and set the game public.");
 }
 
 async function commandGames(): Promise<void> {
   const token = await requireAuthToken();
-  const response = await getMyGames(token);
-  const games = response.games || [];
+  const games = await getMyGames(token);
 
   if (games.length === 0) {
     console.log("No canonical games found for this account.");
     return;
   }
 
-  console.log(pad("Title", 32) + pad("Drafts", 8) + pad("Live", 10) + "Updated");
+  console.log(pad("Title", 32) + pad("Public", 8) + pad("Live", 10) + "Updated");
   games.forEach((game) => {
     const title = (game.title || "").slice(0, 30);
-    const drafts = String(game.draftCount ?? "-");
-    const live = game.liveLabel || "-";
+    const publicState = game.isPublic ? "yes" : "no";
+    const live = game.liveLabel || (game.activeVersionId ? game.activeVersionId.slice(0, 8) : "-");
     const updated = game.updatedAt ? formatRelativeTime(game.updatedAt) : "-";
-    console.log(pad(title, 32) + pad(drafts, 8) + pad(live, 10) + updated);
+    console.log(pad(title, 32) + pad(publicState, 8) + pad(live, 10) + updated);
   });
 }
 

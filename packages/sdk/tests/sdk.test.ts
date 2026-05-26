@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { enableLogOverlay, oasiz } from "../src/index.ts";
+import { enableAppSimulator } from "../src/app-simulator.ts";
 import {
   getSafeAreaTop,
   getViewportInsets,
   setLeaderboardVisible,
 } from "../src/layout.ts";
+import { getGraphicsPerformance } from "../src/performance.ts";
 import { onPause, onResume } from "../src/lifecycle.ts";
-import { leaveGame, onBackButton, onLeaveGame } from "../src/navigation.ts";
+import {
+  enableBackButtonTesting,
+  leaveGame,
+  onBackButton,
+  onLeaveGame,
+} from "../src/navigation.ts";
 import {
   getGameId,
   getPlayerAvatar,
@@ -66,12 +73,25 @@ class NavigationTarget {
 
 class FakeElement {
   children: FakeElement[] = [];
+  className = "";
+  classList = {
+    add: (...names: string[]) => {
+      const current = new Set(this.className.split(/\s+/).filter(Boolean));
+      for (const name of names) {
+        current.add(name);
+      }
+      this.className = Array.from(current).join(" ");
+    },
+  };
   parentNode: FakeElement | null = null;
   scrollHeight = 0;
   scrollTop = 0;
   style: Record<string, string> = {};
   tagName: string;
   type = "";
+  title = "";
+  innerHTML = "";
+  private attributes = new Map<string, string>();
   private textValue = "";
   private listeners = new Map<string, Set<() => void>>();
 
@@ -117,6 +137,18 @@ class FakeElement {
     this.parentNode = null;
   }
 
+  getAttribute(name: string): string | null {
+    return this.attributes.get(name) ?? null;
+  }
+
+  setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  removeAttribute(name: string): void {
+    this.attributes.delete(name);
+  }
+
   get textContent(): string {
     return this.textValue;
   }
@@ -135,6 +167,8 @@ class FakeElement {
 
 class FakeDocument extends EventTarget {
   body: FakeElement | null = new FakeElement("body");
+  documentElement: FakeElement = new FakeElement("html");
+  head: FakeElement | null = new FakeElement("head");
 
   createElement(tagName: string): FakeElement {
     return new FakeElement(tagName);
@@ -233,6 +267,90 @@ test("triggerHaptic calls bridge with provided type", () => {
   );
 
   assert.deepEqual(calls, ["medium"]);
+});
+
+test("getGraphicsPerformance returns a medium default without window", () => {
+  const metric = withoutWindow(() => getGraphicsPerformance());
+
+  assert.deepEqual(metric, { fps: 45, tier: "medium" });
+});
+
+test("getGraphicsPerformance reads host-provided fps and tier", () => {
+  const metric = withWindow(
+    {
+      getGraphicsPerformance: () => ({ fps: 60, tier: "high" }),
+    },
+    () => getGraphicsPerformance(),
+  );
+
+  assert.deepEqual(metric, { fps: 60, tier: "high" });
+});
+
+test("oasiz.getGraphicsPerformance exposes fps and tier on the SDK object", () => {
+  const metric = withWindow(
+    {
+      __OASIZ_GRAPHICS_PERFORMANCE__: { fps: 30, tier: "low" },
+    },
+    () => oasiz.getGraphicsPerformance(),
+  );
+
+  assert.deepEqual(metric, { fps: 30, tier: "low" });
+});
+
+test("getGraphicsPerformance normalizes tier-only host values", () => {
+  const metric = withWindow(
+    {
+      __OASIZ_GRAPHICS_PERFORMANCE__: { tier: "minimal" },
+    },
+    () => oasiz.graphicsPerformance,
+  );
+
+  assert.deepEqual(metric, { fps: 24, tier: "minimal" });
+});
+
+test("getGraphicsPerformance derives minimal tier from low fps host values", () => {
+  const metric = withWindow(
+    {
+      __OASIZ_GRAPHICS_PERFORMANCE__: { fps: 24 },
+    },
+    () => getGraphicsPerformance(),
+  );
+
+  assert.deepEqual(metric, { fps: 24, tier: "minimal" });
+});
+
+test("getGraphicsPerformance estimates high tier from strong mobile WebGL signals", () => {
+  const gl = {
+    MAX_TEXTURE_SIZE: 3379,
+    RENDERER: 7937,
+    getExtension: () => ({ UNMASKED_RENDERER_WEBGL: 37446 }),
+    getParameter: (param: number) => (param === 3379 ? 8192 : "Apple GPU"),
+  };
+
+  const metric = withWindow(
+    {
+      devicePixelRatio: 3,
+      document: {
+        createElement: () => ({
+          getContext: (name: string) => (name === "webgl2" ? gl : null),
+        }),
+      },
+      innerHeight: 932,
+      innerWidth: 430,
+      matchMedia: () => ({ matches: true }),
+      navigator: {
+        deviceMemory: 8,
+        hardwareConcurrency: 8,
+        userAgent:
+          "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+      },
+      screen: { height: 932, width: 430 },
+    },
+    () => getGraphicsPerformance(),
+  );
+
+  assert.equal(metric.tier, "high");
+  assert.equal(metric.fps, 60);
 });
 
 test("enableLogOverlay is safe when disabled or outside the browser", () => {
@@ -878,6 +996,144 @@ test("onBackButton subscribes, toggles override bridge, and unsubscribes", () =>
 
   assert.deepEqual(overrideCalls, [true, false]);
   assert.equal(leaveGameCalls, 0);
+});
+
+test("enableBackButtonTesting lets Escape simulate a host back action", () => {
+  const target = new EventTarget();
+  const fakeWindow: Record<string, unknown> = {
+    addEventListener: target.addEventListener.bind(target),
+    removeEventListener: target.removeEventListener.bind(target),
+    dispatchEvent: target.dispatchEvent.bind(target),
+  };
+
+  withWindow(fakeWindow, () => {
+    const handle = enableBackButtonTesting({ browserHistory: false });
+    let backPresses = 0;
+    let leaves = 0;
+
+    const offBack = onBackButton(() => {
+      backPresses += 1;
+    });
+    const offLeave = onLeaveGame(() => {
+      leaves += 1;
+    });
+
+    const keyEvent = new Event("keydown") as Event & { key: string };
+    Object.defineProperty(keyEvent, "key", { value: "Escape" });
+    target.dispatchEvent(keyEvent);
+
+    assert.equal(backPresses, 1);
+    assert.equal(handle.isBackOverrideActive(), true);
+
+    handle.triggerLeave();
+    assert.equal(leaves, 1);
+
+    offBack();
+    target.dispatchEvent(keyEvent);
+    assert.equal(backPresses, 1);
+    assert.equal(handle.isBackOverrideActive(), false);
+
+    offLeave();
+    handle.destroy();
+    assert.equal(fakeWindow.__oasizSetBackOverride, undefined);
+    assert.equal(fakeWindow.__oasizLeaveGame, undefined);
+  });
+});
+
+test("enableBackButtonTesting maps browser history popstate while override is active", () => {
+  const target = new EventTarget();
+  const pushStates: unknown[] = [];
+  const replaceStates: unknown[] = [];
+  const history = {
+    state: null as unknown,
+    pushState(state: unknown): void {
+      this.state = state;
+      pushStates.push(state);
+    },
+    replaceState(state: unknown): void {
+      this.state = state;
+      replaceStates.push(state);
+    },
+  };
+
+  withWindow(
+    {
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+      dispatchEvent: target.dispatchEvent.bind(target),
+      history,
+      location: { href: "http://localhost/game" },
+    },
+    () => {
+      const handle = enableBackButtonTesting({ keyboard: false });
+      let backPresses = 0;
+      const offBack = onBackButton(() => {
+        backPresses += 1;
+      });
+
+      assert.equal(replaceStates.length, 1);
+      assert.equal(pushStates.length, 1);
+
+      target.dispatchEvent(new Event("popstate"));
+
+      assert.equal(backPresses, 1);
+      assert.equal(pushStates.length, 2);
+
+      offBack();
+      handle.destroy();
+    },
+  );
+});
+
+test("enableAppSimulator installs app chrome bridge and simulated back events", () => {
+  const target = new EventTarget();
+  const fakeDocument = new FakeDocument();
+
+  withBrowser(
+    {
+      documentImpl: fakeDocument,
+      windowImpl: {
+        addEventListener: target.addEventListener.bind(target),
+        removeEventListener: target.removeEventListener.bind(target),
+        dispatchEvent: target.dispatchEvent.bind(target),
+        innerHeight: 852,
+        innerWidth: 393,
+        location: { href: "http://localhost/game" },
+      },
+    },
+    ({ window }) => {
+      const handle = enableAppSimulator({
+        browserHistoryBack: false,
+        comments: 3,
+        frame: false,
+        keyboardBack: false,
+        likes: 7,
+      });
+
+      const insets = getViewportInsets();
+      assert.ok(insets.pixels.top > 44);
+      assert.equal(insets.pixels.left, 0);
+
+      let backPresses = 0;
+      const offBack = onBackButton(() => {
+        backPresses += 1;
+      });
+
+      handle.triggerBack();
+      assert.equal(backPresses, 1);
+
+      setLeaderboardVisible(false);
+      handle.openLeaderboard();
+      handle.openComments();
+      handle.closeSheet();
+      handle.setCounts({ comments: 4, likes: 8 });
+      handle.setLiked(true);
+
+      offBack();
+      handle.destroy();
+      assert.equal(window.__oasizAppSimulatorHandle__, undefined);
+    },
+  );
 });
 
 test("onBackButton falls back to leaveGame and rethrows callback errors", () => {

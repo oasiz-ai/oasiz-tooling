@@ -1,3 +1,4 @@
+import { enableAppSimulator } from "./app-simulator.ts";
 import { getPlayerCharacter } from "./character.ts";
 import { triggerHaptic } from "./haptics.ts";
 import { enableLogOverlay } from "./log-overlay.ts";
@@ -16,8 +17,17 @@ import { share } from "./share.ts";
 import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
 import { getSafeAreaTop, getViewportInsets, setLeaderboardVisible } from "./layout.ts";
-import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+import { enableBackButtonTesting, leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+import { getGraphicsPerformance } from "./performance.ts";
 
+export { enableAppSimulator } from "./app-simulator.ts";
+export type {
+  AppSimulatorDevice,
+  AppSimulatorDeviceName,
+  AppSimulatorHandle,
+  AppSimulatorOptions,
+  AppSimulatorOrientation,
+} from "./app-simulator.ts";
 export { getPlayerCharacter } from "./character.ts";
 export { triggerHaptic } from "./haptics.ts";
 export { enableLogOverlay } from "./log-overlay.ts";
@@ -42,7 +52,16 @@ export type {
   ViewportInsets,
   ViewportInsetSide,
 } from "./layout.ts";
-export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+export { enableBackButtonTesting, leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+export type {
+  BackButtonTestingHandle,
+  BackButtonTestingOptions,
+} from "./navigation.ts";
+export { getGraphicsPerformance } from "./performance.ts";
+export type {
+  GraphicsPerformanceMetric,
+  GraphicsPerformanceTier,
+} from "./performance.ts";
 export type { Unsubscribe } from "./lifecycle.ts";
 export type {
   FacingFrameMap,
@@ -62,6 +81,7 @@ export type {
 
 export const oasiz = {
   submitScore,
+  enableAppSimulator,
   addScore,
   setScore,
   getPlayerCharacter,
@@ -78,6 +98,8 @@ export const oasiz = {
   getSafeAreaTop,
   getViewportInsets,
   setLeaderboardVisible,
+  getGraphicsPerformance,
+  enableBackButtonTesting,
   onBackButton,
   onLeaveGame,
   leaveGame,
@@ -101,5 +123,8 @@ export const oasiz = {
   },
   get viewportInsets() {
     return getViewportInsets();
+  },
+  get graphicsPerformance() {
+    return getGraphicsPerformance();
   },
 };

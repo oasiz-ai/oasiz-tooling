@@ -6,6 +6,8 @@ const RELEASE_RANK = {
   major: 3,
 };
 
+const DEFAULT_RELEASE_TYPE_ON_CHANGE = "patch";
+
 function toPosixPath(path) {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
 }
@@ -51,6 +53,14 @@ function getReleaseType(message) {
   return null;
 }
 
+function getDefaultReleaseTypeOnChange(pluginConfig) {
+  const releaseType = pluginConfig.defaultReleaseTypeOnChange;
+  if (releaseType === "patch" || releaseType === "minor" || releaseType === "major") {
+    return releaseType;
+  }
+  return DEFAULT_RELEASE_TYPE_ON_CHANGE;
+}
+
 function filterCommits(commits, packagePath) {
   return commits.filter((commit) => commitTouchesWorkspace(commit, packagePath));
 }
@@ -81,8 +91,9 @@ export async function analyzeCommits(pluginConfig, context) {
   }
 
   if (!nextReleaseType) {
+    nextReleaseType = getDefaultReleaseTypeOnChange(pluginConfig);
     context.logger.log(
-      `Commits touched ${packagePath}, but none require a release.`,
+      `Commits touched ${packagePath}; defaulting to a ${nextReleaseType} release.`,
     );
   }
 

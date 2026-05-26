@@ -11,13 +11,26 @@ export type PublishCategory =
   | "strategy"
   | "casual";
 
+export type WebGameEngine =
+  | "html"
+  | "phaser"
+  | "pixi"
+  | "three"
+  | "cocos-html5"
+  | "unity-webgl";
+
+export type GameOrientation = "portrait" | "landscape" | "any";
+
 export interface PublishConfig {
   title: string;
   description: string;
   category: PublishCategory;
+  engine?: WebGameEngine;
   gameId?: string;
+  isPublic?: boolean;
   isMultiplayer?: boolean;
   maxPlayers?: number;
+  orientation?: GameOrientation;
   runtimeManifest?: Record<string, unknown>;
   verticalOnly?: boolean;
 }
@@ -105,9 +118,12 @@ export async function readPublishConfig(gamePath: string): Promise<PublishConfig
     title: parsed.title || defaults.title,
     description: parsed.description || defaults.description,
     category: parsed.category || defaults.category,
+    engine: parsed.engine,
     gameId: parsed.gameId,
+    isPublic: typeof parsed.isPublic === "boolean" ? parsed.isPublic : undefined,
     isMultiplayer: parsed.isMultiplayer,
     maxPlayers: parsed.maxPlayers,
+    orientation: parsed.orientation,
     runtimeManifest:
       parsed.runtimeManifest &&
       typeof parsed.runtimeManifest === "object" &&

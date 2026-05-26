@@ -13,7 +13,7 @@ Both talk to the same host bridges (`window.submitScore`, `__oasizLeaveGame`, la
 
 ## HTML5 / TypeScript (`@oasiz/sdk`)
 
-Typed SDK for integrating browser games with the Oasiz platform: score, haptics, cross-session state, multiplayer hooks, layout (safe area, leaderboard visibility), navigation (back / leave), and lifecycle events.
+Typed SDK for integrating browser games with the Oasiz platform: score, haptics, cross-session state, multiplayer hooks, layout (safe area, leaderboard visibility), graphics performance, navigation (back / leave), and lifecycle events.
 
 ### Install
 
@@ -27,6 +27,11 @@ The published package includes ESM, CommonJS, and TypeScript declarations.
 
 ```ts
 import { oasiz } from "@oasiz/sdk";
+
+// 0. Optional local app preview for web development
+if (import.meta.env.DEV) {
+  oasiz.enableAppSimulator();
+}
 
 // 1. Load persisted state at the start of each session
 const state = oasiz.loadGameState();
@@ -44,18 +49,90 @@ document.documentElement.style.setProperty(
   `${oasiz.safeAreaTop}vh`,
 );
 
-// 5. Submit score when the game ends
+// 5. Pick graphics settings for this device
+const graphics = oasiz.getGraphicsPerformance();
+renderer.setPixelRatio(graphics.tier === "high" ? 1.5 : graphics.tier === "medium" ? 1.25 : 1);
+
+// 6. Submit score when the game ends
 oasiz.submitScore(score);
 
-// 6. Optionally hide the leaderboard while a custom overlay is open
+// 7. Optionally hide the leaderboard while a custom overlay is open
 oasiz.setLeaderboardVisible(false);
 
-// 7. Optionally surface console logs in-game while debugging
+// 8. Optionally surface console logs in-game while debugging
 oasiz.enableLogOverlay({
   enabled: new URLSearchParams(window.location.search).has("oasizLogs"),
   collapsed: true,
 });
 ```
+
+### Local app simulator
+
+#### `oasiz.enableAppSimulator(options?: AppSimulatorOptions): AppSimulatorHandle`
+
+Opt-in local web helper for previewing a game inside Oasiz-style mobile chrome. It simulates the app back button, leaderboard pill, like/comment hub, comments modal, and leaderboard modal while also injecting local safe-area and viewport-inset bridge values.
+
+```ts
+if (import.meta.env.DEV) {
+  oasiz.enableAppSimulator();
+}
+
+oasiz.onBackButton(() => {
+  togglePauseMenu();
+});
+```
+
+By default, the game is placed inside a centered phone-sized box so developers can resize their browser around the same shape the app uses. The default device is `iphone-17-pro-max` (`440 × 956` CSS pixels). You can change the preview:
+
+```ts
+const appPreview = oasiz.enableAppSimulator({
+  device: "iphone-17-pro-max",
+  likes: 2400,
+  comments: 18,
+  score: 12400,
+});
+
+debugCommentsButton.onclick = () => appPreview.openComments();
+debugLeaderboardButton.onclick = () => appPreview.openLeaderboard();
+```
+
+Set `frame: false` if your own dev harness already renders the game in a phone frame.
+
+The simulator includes the back-button test bridge, so Escape, browser Back, and the simulated app back button all route through the same `oasiz.onBackButton(...)` handler when back override is active. Use `enableBackButtonTesting()` directly only when you want back simulation without app chrome.
+
+Supported `device` presets:
+
+| Device option | CSS viewport |
+| --- | --- |
+| `iphone-11` | `414 × 896` |
+| `iphone-11-pro` | `375 × 812` |
+| `iphone-11-pro-max` | `414 × 896` |
+| `iphone-12-mini` | `375 × 812` |
+| `iphone-12` | `390 × 844` |
+| `iphone-12-pro` | `390 × 844` |
+| `iphone-12-pro-max` | `428 × 926` |
+| `iphone-13-mini` | `375 × 812` |
+| `iphone-13` | `390 × 844` |
+| `iphone-13-pro` | `390 × 844` |
+| `iphone-13-pro-max` | `428 × 926` |
+| `iphone-14` | `390 × 844` |
+| `iphone-14-plus` | `428 × 926` |
+| `iphone-14-pro` | `393 × 852` |
+| `iphone-14-pro-max` | `430 × 932` |
+| `iphone-15` | `393 × 852` |
+| `iphone-15-plus` | `430 × 932` |
+| `iphone-15-pro` | `393 × 852` |
+| `iphone-15-pro-max` | `430 × 932` |
+| `iphone-16` | `393 × 852` |
+| `iphone-16-plus` | `430 × 932` |
+| `iphone-16-pro` | `402 × 874` |
+| `iphone-16-pro-max` | `440 × 956` |
+| `iphone-16e` | `390 × 844` |
+| `iphone-17` | `402 × 874` |
+| `iphone-17-pro` | `402 × 874` |
+| `iphone-17-pro-max` | `440 × 956` |
+| `iphone-17e` | `390 × 844` |
+| `iphone-air` | `420 × 912` |
 
 ### Score
 
@@ -264,6 +341,43 @@ function closeCustomOverlay(): void {
 
 Unsupported hosts safely no-op.
 
+### Graphics performance
+
+#### `oasiz.getGraphicsPerformance(): GraphicsPerformanceMetric`
+
+Returns a recommended FPS target and suggested rendering tier:
+
+```ts
+const graphics = oasiz.getGraphicsPerformance();
+// graphics is { fps: number, tier: "minimal" | "low" | "medium" | "high" }
+
+gameLoop.setTargetFps(graphics.fps);
+
+switch (graphics.tier) {
+  case "high":
+    enablePostProcessing();
+    renderer.setPixelRatio(1.5);
+    break;
+  case "medium":
+    renderer.setPixelRatio(1.25);
+    break;
+  case "low":
+    disableHeavyParticles();
+    renderer.setPixelRatio(1);
+    break;
+  case "minimal":
+    disableOptionalEffects();
+    renderer.setPixelRatio(0.75);
+    break;
+}
+```
+
+The returned object is `{ fps, tier }`, where `fps` is the recommended render target and `tier` is `"minimal"`, `"low"`, `"medium"`, or `"high"`. Hosts can inject measured values with `window.getGraphicsPerformance()` or `window.__OASIZ_GRAPHICS_PERFORMANCE__`; otherwise the SDK estimates from browser, device, and WebGL capability signals.
+
+#### `oasiz.graphicsPerformance`
+
+Getter alias for `getGraphicsPerformance()`.
+
 ### Lifecycle
 
 The platform dispatches lifecycle events when the app goes to the background or returns to the foreground. Subscribe to pause game loops and audio accordingly.
@@ -314,6 +428,29 @@ const offBack = oasiz.onBackButton(() => {
 // Restore default host back behavior when no longer needed
 offBack();
 ```
+
+#### `oasiz.enableBackButtonTesting(options?: BackButtonTestingOptions): BackButtonTestingHandle`
+
+Opt-in local web helper for testing back override behavior without the Oasiz app bridge. Call it before registering `onBackButton` in local development:
+
+```ts
+if (import.meta.env.DEV) {
+  oasiz.enableBackButtonTesting();
+}
+
+const offBack = oasiz.onBackButton(() => {
+  closePauseMenuOrOpenIt();
+});
+```
+
+While a back listener is active, the helper maps Escape to the same `oasiz:back` event the app sends. By default it also traps one browser-history entry so the browser Back button dispatches `oasiz:back` instead of leaving the page.
+
+```ts
+const backTest = oasiz.enableBackButtonTesting({ browserHistory: false });
+testBackButton.onclick = () => backTest.triggerBack();
+```
+
+The returned handle also exposes `triggerLeave()` and `destroy()`. This helper is for local/dev web testing; in the app, the real bridge still owns back behavior.
 
 #### `oasiz.leaveGame(): void`
 
@@ -420,7 +557,10 @@ import {
   flushGameState,
   shareRoomCode,
   openInviteModal,
+  enableAppSimulator,
   enableLogOverlay,
+  enableBackButtonTesting,
+  getGraphicsPerformance,
   getSafeAreaTop,
   getViewportInsets,
   setLeaderboardVisible,
@@ -440,7 +580,16 @@ import {
 
 ```ts
 import type {
+  AppSimulatorDevice,
+  AppSimulatorDeviceName,
+  AppSimulatorHandle,
+  AppSimulatorOptions,
+  AppSimulatorOrientation,
+  BackButtonTestingHandle,
+  BackButtonTestingOptions,
   GameState,
+  GraphicsPerformanceMetric,
+  GraphicsPerformanceTier,
   HapticType,
   LogOverlayEntry,
   LogOverlayHandle,
@@ -486,6 +635,10 @@ public class GameManager : MonoBehaviour
         float safeTopPx = safeTopPct / 100f * Screen.height;
         Debug.Log($"Safe area top: {safeTopPx}px ({safeTopPct}% of height)");
 
+        // Pick visual settings for the current device
+        GraphicsPerformanceMetric graphics = OasizSDK.GetGraphicsPerformance();
+        Debug.Log($"Graphics tier: {graphics.tier} ({graphics.fps} FPS target)");
+
         // Emit score normalization anchors
         OasizSDK.EmitScoreConfig(new ScoreConfig(
             new ScoreAnchor(10, 100),
@@ -530,8 +683,10 @@ public class GameManager : MonoBehaviour
 | `oasiz.getViewportInsets()` / `viewportInsets` | `OasizSDK.GetViewportInsets()` (`ViewportInsets`, each side 0–100, % of matching viewport axis) |
 | `oasiz.getSafeAreaTop()` / `safeAreaTop` | `OasizSDK.GetSafeAreaTop()` / `OasizSDK.SafeAreaTop` (`float`, 0–100, % of viewport height; legacy alias for top viewport inset) |
 | `oasiz.setLeaderboardVisible(v)` | `OasizSDK.SetLeaderboardVisible(bool)` |
+| `oasiz.getGraphicsPerformance()` / `graphicsPerformance` | `OasizSDK.GetGraphicsPerformance()` / `OasizSDK.GraphicsPerformance` (`GraphicsPerformanceMetric`, recommended FPS plus `minimal` / `low` / `medium` / `high`) |
 | `oasiz.onPause` / `onResume` | `OasizSDK.OnPause` / `OnResume` static events |
 | `oasiz.onBackButton` | `OasizSDK.OnBackButton` or `SubscribeBackButton(Action)` (reference-counts `__oasizSetBackOverride`) |
+| `oasiz.enableBackButtonTesting()` | `OasizSDK.EnableBackButtonTesting()` (WebGL local/dev helper for Escape/browser Back testing) |
 | `oasiz.onLeaveGame` | `OasizSDK.OnLeaveGame` |
 | `oasiz.leaveGame()` | `OasizSDK.LeaveGame()` |
 | `oasiz.share(request)` | `OasizSDK.Share(ShareRequest)` |
@@ -541,6 +696,23 @@ public class GameManager : MonoBehaviour
 | -- | `OasizSDK.EmitScoreConfig(ScoreConfig)` → `window.emitScoreConfig` (Unity-only helper for normalized score UI) |
 | `oasiz.enableLogOverlay` | `OasizSDK.EnableLogOverlay(LogOverlayOptions)` (see note below) |
 | -- | `OasizSDK.AppendLogOverlay(level, message, stackTrace)` (see note below) |
+
+### Local back-button testing (Unity WebGL)
+
+For local WebGL builds outside the Oasiz app, install the dev bridge before testing your subscribed back handler:
+
+```csharp
+#if DEVELOPMENT_BUILD || UNITY_EDITOR
+OasizSDK.EnableBackButtonTesting();
+#endif
+
+Action unsubscribeBack = OasizSDK.SubscribeBackButton(() =>
+{
+    TogglePauseMenu();
+});
+```
+
+While the override is active, Escape and the browser Back button dispatch the same `oasiz:back` event that the app bridge sends. You can disable either input with `OasizSDK.EnableBackButtonTesting(keyboard: false)` or `OasizSDK.EnableBackButtonTesting(browserHistory: false)`.
 
 ### Share (Unity)
 

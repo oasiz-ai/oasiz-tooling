@@ -1,43 +1,44 @@
 import { getApiUrl } from "./auth.ts";
 
-export interface PreflightGame {
-  id: string;
-  title: string;
-  r2Key?: string | null;
-  slug?: string | null;
-}
-
 export interface StudioDraft {
   id: string;
   label: string;
   r2Key?: string | null;
   createdAt: string;
   isLive?: boolean;
-}
-
-export interface UploadPreflightResponse {
-  ok: boolean;
-  game: PreflightGame | null;
-  drafts: StudioDraft[];
-}
-
-export interface ActivateDraftResponse {
-  ok: boolean;
-  label?: string;
+  isPublic?: boolean;
 }
 
 export interface MyGameItem {
   id: string;
   title: string;
+  description?: string | null;
+  category?: string | null;
+  imageUrl?: string | null;
+  isPublic?: boolean;
+  isReviewed?: boolean;
+  activeVersionId?: string | null;
+  rootGameId?: string | null;
+  parentId?: string | null;
+  createdAt?: string | null;
   slug?: string | null;
   updatedAt?: string | null;
   draftCount?: number | null;
   liveLabel?: string | null;
 }
 
-export interface MyGamesResponse {
+export interface LegacyMyGamesResponse {
   ok: boolean;
   games: MyGameItem[];
+}
+
+export type MyGamesResponse = MyGameItem[] | LegacyMyGamesResponse;
+
+export interface PublishLiveResponse {
+  ok: boolean;
+  rootId?: string;
+  versionId?: string;
+  error?: string;
 }
 
 interface ApiOptions {
@@ -91,19 +92,22 @@ async function apiRequest<T>(path: string, options: ApiOptions = {}): Promise<T>
   return (await response.json()) as T;
 }
 
-export async function getUploadPreflight(title: string, token: string): Promise<UploadPreflightResponse> {
-  const query = new URLSearchParams({ title }).toString();
-  return apiRequest<UploadPreflightResponse>("/api/upload/preflight?" + query, { token });
+export async function getMyGames(
+  token: string,
+  options: { includeVersions?: boolean; limit?: number } = {},
+): Promise<MyGameItem[]> {
+  const query = new URLSearchParams();
+  if (options.includeVersions) query.set("includeVersions", "true");
+  if (options.limit !== undefined) query.set("limit", String(options.limit));
+  const path = "/api/games/mine" + (query.size > 0 ? "?" + query.toString() : "");
+  const response = await apiRequest<MyGamesResponse>(path, { token });
+  return Array.isArray(response) ? response : response.games || [];
 }
 
-export async function postActivateDraft(draftId: string, token: string): Promise<ActivateDraftResponse> {
-  return apiRequest<ActivateDraftResponse>("/api/upload/activate", {
+export async function postPublishLive(gameId: string, versionId: string, token: string): Promise<PublishLiveResponse> {
+  return apiRequest<PublishLiveResponse>("/api/games/" + encodeURIComponent(gameId) + "/publish-live", {
     method: "POST",
     token,
-    body: { draftId },
+    body: { versionId },
   });
-}
-
-export async function getMyGames(token: string): Promise<MyGamesResponse> {
-  return apiRequest<MyGamesResponse>("/api/games/mine", { token });
 }

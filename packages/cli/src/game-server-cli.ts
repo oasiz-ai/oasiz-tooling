@@ -6,7 +6,7 @@ import { isGameSlug } from "./lib/game.ts";
 import { resolveAuthToken } from "./lib/auth.ts";
 import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
-const DEFAULT_GAME_SERVER_API_BASE = "https://api.oasiz.ai";
+const DEFAULT_GAME_SERVER_API_BASE = "https://www.oasiz.gg";
 const STAGE_GAME_SERVER_API_BASE = "https://api-stage.oasiz.ai";
 const DEFAULT_CLIENT_UPDATE_HZ = 20;
 const DEFAULT_SERVER_TICK_HZ = 0;
@@ -137,7 +137,7 @@ function printGameServerHelp(): void {
   console.log("  --server-tick-hz <n>        Server simulation tick rate, 0 for unlimited (default: 0)");
   console.log("  --min-replicas <n>          Minimum replicas (default: 1)");
   console.log("  --max-replicas <n>          Maximum replicas (default: 10)");
-  console.log("  --api-url <url>             API base URL (default: https://api.oasiz.ai)");
+  console.log("  --api-url <url>             API base URL (default: https://www.oasiz.gg)");
   console.log("  --wait                      Poll build status until it finishes");
   console.log("  --dry-run                   Print the request without creating a server");
   console.log("  --json                      Print the raw JSON response");
@@ -236,7 +236,7 @@ function sanitizeArchiveRootName(value: string): string {
 }
 
 function getGameServerApiBaseUrl(apiUrlOverride: string | undefined): string {
-  return normalizeApiBase(apiUrlOverride || process.env.OASIZ_GAME_SERVER_API_URL || DEFAULT_GAME_SERVER_API_BASE);
+  return normalizeApiBase(apiUrlOverride || DEFAULT_GAME_SERVER_API_BASE);
 }
 
 function summarizeErrorBody(raw: string): string {

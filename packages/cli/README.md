@@ -43,21 +43,24 @@ The CLI supports:
 - `OASIZ_UPLOAD_TOKEN`
 
 `oasiz upload` For normal uploads, the CLI initializes an upload with the Oasiz API, requests presigned URLs, uploads build assets directly to R2 for CDN delivery, syncs the final HTML, then uploads a thumbnail if one is present.
+The public CLI always uses the production Oasiz API (`https://www.oasiz.gg`) and production browser login (`https://oasiz.ai`).
 Useful upload flags:
 
 - `--dry-run` reports title, slug, verticalOnly, gameId, bundle size, thumbnail state, asset count, asset bytes, and presigned CDN transport without contacting the API.
 - `--skip-build` uses the existing `dist/` output.
 - `--inline` keeps legacy single-HTML behavior for games that need it.
 - `--withlog` injects a preboot log overlay into the uploaded HTML for Unity and non-Unity games without modifying build files on disk.
+- `--public` sends `isPublic: true` during upload.
+- `--activate` publishes the uploaded game/version live through the current games API.
 - `horizontal` or `vertical` overrides `publish.json` orientation for that upload.
 
-Upload sends runtime manifest data when `publish.json` includes a `runtimeManifest` object. Unity WebGL uploads now also send a default web runtime manifest with `engine: "unity-webgl"` so mobile/app clients can route them through the correct engine lane. Uploaded assets are finalized with manifest metadata such as R2 key, content type, role, size, hash, and content encoding.
+Upload sends runtime manifest data for each game, with `publish.json` able to override or extend it through a `runtimeManifest` object. Unity WebGL uploads send a default web runtime manifest with `engine: "unity-webgl"` so mobile/app clients can route them through the correct engine lane. Uploaded assets are finalized with manifest metadata such as R2 key, content type, role, size, hash, and content encoding.
 
 Unity WebGL exports are detected under `Unity/<game>/Build/index.html`; the upload includes Build assets, preserves the OasizDefault template marker behavior, and rewrites Unity asset paths for CDN delivery when needed.
 
 ## Game Servers
 
-`oasiz game-server create <slug>` creates a Colyseus game server through the game-server API. The command defaults to `https://api.oasiz.ai`.
+`oasiz game-server create <slug>` creates a Colyseus game server through the game-server API. The command defaults to `https://www.oasiz.gg`.
 
 Servers are standalone by default. The CLI only uses workspace-scoped routes when `--workspace` or `--workspace-id` is provided.
 
@@ -166,9 +169,6 @@ When source bundles include a `package.json`, the builder runs dependency instal
 Environment variables:
 
 ```bash
-OASIZ_API_URL=http://localhost:3001
-OASIZ_GAME_SERVER_API_URL=https://api.oasiz.ai
-OASIZ_WEB_URL=http://localhost:5173
 OASIZ_EMAIL=your-email@example.com
 OASIZ_PROJECT_ROOT=/path/to/your/game-repo
 OASIZ_CREDENTIALS_PATH=/path/to/credentials.json

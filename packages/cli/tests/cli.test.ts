@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { runCli } from "../src/index.ts";
-import { getWebBaseUrl } from "../src/lib/auth.ts";
+import { getApiBaseUrl, getWebBaseUrl } from "../src/lib/auth.ts";
 import { __uploadTestHooks, runUploadCli, runUploadCommand } from "../src/upload-cli.ts";
 
 async function withTempProject(fn: (root: string) => Promise<void>): Promise<void> {
@@ -58,15 +58,7 @@ async function writeViteFixture(root: string, name = "kite"): Promise<string> {
         description: "asset-heavy test",
         category: "arcade",
         gameId: "game-existing",
-        runtimeManifest: {
-          artifactSchemaVersion: 1,
-          runtime: "web",
-          engine: "phaser",
-          entry: "index.html",
-          orientation: "landscape",
-          sdkVersion: "fixture",
-          capabilities: ["score", "saveState"],
-        },
+        orientation: "landscape",
         verticalOnly: false,
       },
       null,
@@ -74,9 +66,10 @@ async function writeViteFixture(root: string, name = "kite"): Promise<string> {
     ),
     "utf8",
   );
+  await writeFile(join(gamePath, "package.json"), JSON.stringify({ dependencies: { phaser: "^3.90.0" } }), "utf8");
   await writeFile(
     join(gamePath, "dist", "index.html"),
-    '<!doctype html><html><head><script type="module" src="./assets/index.js"></script></head><body><img src="./images/pic.png"></body></html>',
+    '<!doctype html><html><head><script type="module" src="./assets/index.js"></script></head><body><img src="./images/pic.png"><script src="./assets/game.data.br"></script></body></html>',
     "utf8",
   );
   await writeFile(
@@ -85,6 +78,7 @@ async function writeViteFixture(root: string, name = "kite"): Promise<string> {
     "utf8",
   );
   await writeFile(join(gamePath, "dist", "assets", "config.json"), '{"url":"images/pic.png"}', "utf8");
+  await writeFile(join(gamePath, "dist", "assets", "game.data.br"), Buffer.from([0x1f, 0x8b, 0x08, 0x00]));
   await writeFile(join(gamePath, "dist", "images", "pic.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   await writeFile(join(gamePath, "thumbnail", "cover.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   return gamePath;
@@ -145,13 +139,11 @@ test("browser login callback settles and clears timeout", async () => {
   await withTempProject(async (root) => {
     const credentialsPath = join(root, "credentials.json");
     const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
-    const previousWeb = process.env.OASIZ_WEB_URL;
     const originalLog = console.log;
     const logs: string[] = [];
     let loginUrl = "";
 
     process.env.OASIZ_CREDENTIALS_PATH = credentialsPath;
-    process.env.OASIZ_WEB_URL = "http://login.test";
     console.log = (...args: unknown[]) => {
       const line = args.map(String).join(" ");
       logs.push(line);
@@ -197,8 +189,6 @@ test("browser login callback settles and clears timeout", async () => {
       console.log = originalLog;
       if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
       else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
-      if (previousWeb === undefined) delete process.env.OASIZ_WEB_URL;
-      else process.env.OASIZ_WEB_URL = previousWeb;
     }
   });
 });
@@ -217,7 +207,68 @@ test("api errors include target request URL", async () => {
   assert.match(source, /Response preview: "/);
 });
 
-test("game-server create posts standalone request to api.oasiz.ai by default", async () => {
+test("CLI no longer references retired upload preflight and activate routes", async () => {
+  const apiSource = await readFile(fileURLToPath(new URL("../src/lib/api.ts", import.meta.url)), "utf8");
+  const cliSource = await readFile(fileURLToPath(new URL("../src/cli.ts", import.meta.url)), "utf8");
+  const uploadSource = await readFile(fileURLToPath(new URL("../src/upload-cli.ts", import.meta.url)), "utf8");
+
+  assert.doesNotMatch(apiSource + cliSource + uploadSource, /\/api\/upload\/preflight/);
+  assert.doesNotMatch(apiSource + cliSource + uploadSource, /\/api\/upload\/activate/);
+});
+
+test("versions command uses current games API instead of upload preflight", async () => {
+  const previousToken = process.env.OASIZ_CLI_TOKEN;
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+
+  process.env.OASIZ_CLI_TOKEN = "env-token";
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = input instanceof Request ? input.url : String(input);
+    calls.push(url);
+    if (url === "https://www.oasiz.gg/api/games/mine?includeVersions=true&limit=100") {
+      return Response.json([
+        {
+          id: "game-root",
+          title: "Kite Runner",
+          isPublic: false,
+          activeVersionId: "game-version-2",
+          rootGameId: null,
+          parentId: null,
+          createdAt: "2026-05-01T00:00:00.000Z",
+          updatedAt: "2026-05-01T00:00:00.000Z",
+        },
+        {
+          id: "game-version-2",
+          title: "Kite Runner",
+          isPublic: true,
+          activeVersionId: null,
+          rootGameId: "game-root",
+          parentId: "game-root",
+          createdAt: "2026-05-02T00:00:00.000Z",
+          updatedAt: "2026-05-02T00:00:00.000Z",
+        },
+      ]);
+    }
+    throw new Error("Unexpected fetch: " + url);
+  }) as typeof fetch;
+
+  try {
+    const output = await captureOutput(async () => {
+      await runCli(["versions", "kite-runner"]);
+    });
+
+    assert.match(output, /Kite Runner - /);
+    assert.match(output, /v1/);
+    assert.match(output, /v2/);
+    assert.equal(calls.some((url) => url.includes("/api/upload/preflight")), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
+    else process.env.OASIZ_CLI_TOKEN = previousToken;
+  }
+});
+
+test("game-server create posts standalone request to www.oasiz.gg by default", async () => {
   await withTempProject(async (root) => {
     const previousGameServerApi = process.env.OASIZ_GAME_SERVER_API_URL;
     const previousToken = process.env.OASIZ_CLI_TOKEN;
@@ -265,7 +316,7 @@ test("game-server create posts standalone request to api.oasiz.ai by default", a
     }
 
     assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, "https://api.oasiz.ai/game-servers");
+    assert.equal(calls[0].url, "https://www.oasiz.gg/game-servers");
     assert.equal(calls[0].method, "POST");
     assert.equal((calls[0].headers as Record<string, string>).Authorization, "Bearer env-token");
     assert.deepEqual(JSON.parse(calls[0].body), {
@@ -393,19 +444,19 @@ test("game-server create uploads local source bundle before creating server", as
       const body = await requestBodyBuffer(init.body);
       calls.push({ url, method, body, headers: init.headers });
 
-      if (url === "https://api.oasiz.ai/game-servers/uploads") {
+      if (url === "https://www.oasiz.gg/game-servers/uploads") {
         return Response.json({
           source_upload_id: "gs-src_test",
-          upload_url: "https://api.oasiz.ai/game-servers/uploads/token-test",
+          upload_url: "https://www.oasiz.gg/game-servers/uploads/token-test",
           expires_at: "2026-05-05T23:59:00Z",
         });
       }
 
-      if (url === "https://api.oasiz.ai/game-servers/uploads/token-test") {
+      if (url === "https://www.oasiz.gg/game-servers/uploads/token-test") {
         return new Response("", { status: 200 });
       }
 
-      if (url === "https://api.oasiz.ai/game-servers") {
+      if (url === "https://www.oasiz.gg/game-servers") {
         return Response.json({
           scope: "standalone",
           build_id: "gs-build-test",
@@ -451,7 +502,7 @@ test("game-server create uploads local source bundle before creating server", as
     const initCall = calls[0];
     const putCall = calls[1];
     const createCall = calls[2];
-    assert.equal(initCall.url, "https://api.oasiz.ai/game-servers/uploads");
+    assert.equal(initCall.url, "https://www.oasiz.gg/game-servers/uploads");
     assert.equal(initCall.method, "POST");
     assert.equal((initCall.headers as Record<string, string>).Authorization, "Bearer env-token");
     const initBody = JSON.parse(initCall.body.toString("utf8")) as {
@@ -462,13 +513,13 @@ test("game-server create uploads local source bundle before creating server", as
     assert.equal(initBody.filename, "arena-server.tar.gz");
     assert.equal(initBody.content_type, "application/gzip");
 
-    assert.equal(putCall.url, "https://api.oasiz.ai/game-servers/uploads/token-test");
+    assert.equal(putCall.url, "https://www.oasiz.gg/game-servers/uploads/token-test");
     assert.equal(putCall.method, "PUT");
     assert.deepEqual([...putCall.body.slice(0, 2)], [0x1f, 0x8b]);
     assert.equal(initBody.sha256, createHash("sha256").update(putCall.body).digest("hex"));
     assert.equal((putCall.headers as Record<string, string>)["Content-Type"], "application/gzip");
 
-    assert.equal(createCall.url, "https://api.oasiz.ai/game-servers");
+    assert.equal(createCall.url, "https://www.oasiz.gg/game-servers");
     assert.equal(createCall.method, "POST");
     assert.deepEqual(JSON.parse(createCall.body.toString("utf8")), {
       custom_slug: "arena",
@@ -485,12 +536,12 @@ test("game-server create uploads local source bundle before creating server", as
   });
 });
 
-test("getWebBaseUrl defaults to production oasiz.ai", () => {
+test("getWebBaseUrl always uses production oasiz.ai", () => {
   const originalWeb = process.env.OASIZ_WEB_URL;
   const originalApi = process.env.OASIZ_API_URL;
 
-  delete process.env.OASIZ_WEB_URL;
-  delete process.env.OASIZ_API_URL;
+  process.env.OASIZ_WEB_URL = "http://localhost:5173";
+  process.env.OASIZ_API_URL = "http://localhost:3001";
 
   try {
     assert.equal(getWebBaseUrl(), "https://oasiz.ai");
@@ -501,6 +552,21 @@ test("getWebBaseUrl defaults to production oasiz.ai", () => {
       process.env.OASIZ_WEB_URL = originalWeb;
     }
 
+    if (originalApi === undefined) {
+      delete process.env.OASIZ_API_URL;
+    } else {
+      process.env.OASIZ_API_URL = originalApi;
+    }
+  }
+});
+
+test("getApiBaseUrl always uses production API", () => {
+  const originalApi = process.env.OASIZ_API_URL;
+  process.env.OASIZ_API_URL = "http://localhost:3001";
+
+  try {
+    assert.equal(getApiBaseUrl(), "https://www.oasiz.gg");
+  } finally {
     if (originalApi === undefined) {
       delete process.env.OASIZ_API_URL;
     } else {
@@ -531,11 +597,13 @@ test("upload dry-run reports presigned CDN upload shape", async () => {
     });
 
     assert.match(output, /Type: CDN Assets \(presigned\)/);
-    assert.match(output, /Assets: 3 files \(/);
+    assert.match(output, /Assets: 4 files \(/);
     assert.match(output, /Asset Transport: CDN assets via presigned R2 upload/);
     assert.match(output, /Has Thumbnail: true/);
+    assert.match(output, /Public: false \(default\)/);
     assert.match(output, /Vertical Only: false/);
     assert.match(output, /Runtime Manifest: web\/phaser/);
+    assert.match(output, /Bundle Version: \d+/);
     assert.match(output, /Game ID: game-existing/);
     assert.match(output, /Bundle Size:/);
   });
@@ -555,13 +623,11 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
       "utf8",
     );
 
-    const previousApi = process.env.OASIZ_API_URL;
     const previousToken = process.env.OASIZ_CLI_TOKEN;
     const previousCredentials = process.env.OASIZ_CREDENTIALS_PATH;
     const originalFetch = globalThis.fetch;
     const calls: Array<{ url: string; method: string; body: string; headers?: HeadersInit }> = [];
 
-    process.env.OASIZ_API_URL = "http://api.test";
     process.env.OASIZ_CLI_TOKEN = "env-token";
     process.env.OASIZ_CREDENTIALS_PATH = credentialsPath;
     globalThis.fetch = (async (input: RequestInfo | URL, init: RequestInit = {}) => {
@@ -575,7 +641,7 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
       }
 
       if (url.endsWith("/api/upload/game/game-123/presign")) {
-        const request = JSON.parse(body) as { assets: Array<{ path: string }> };
+        const request = JSON.parse(body) as { bundleVersion: string; assets: Array<{ path: string }> };
         return Response.json({
           cdnBaseUrl: "https://cdn.test",
           urls: Object.fromEntries(request.assets.map((asset) => [asset.path, "https://r2.test/" + encodeURIComponent(asset.path)])),
@@ -599,34 +665,40 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
         return new Response("thumbnail rejected", { status: 400 });
       }
 
+      if (url.endsWith("/api/games/game-123/publish-live")) {
+        return Response.json({ ok: true, rootId: "game-123", versionId: "draft-sync" });
+      }
+
       throw new Error("Unexpected fetch: " + method + " " + url);
     }) as typeof fetch;
 
     try {
       await captureOutput(async () => {
-        await runUploadCommand("kite", ["--skip-build"]);
+        await runUploadCommand("kite", ["--skip-build", "--public", "--activate"]);
       });
     } finally {
       globalThis.fetch = originalFetch;
-      if (previousApi === undefined) delete process.env.OASIZ_API_URL;
-      else process.env.OASIZ_API_URL = previousApi;
       if (previousToken === undefined) delete process.env.OASIZ_CLI_TOKEN;
       else process.env.OASIZ_CLI_TOKEN = previousToken;
       if (previousCredentials === undefined) delete process.env.OASIZ_CREDENTIALS_PATH;
       else process.env.OASIZ_CREDENTIALS_PATH = previousCredentials;
     }
 
-    assert.equal(calls.some((call) => call.url === "http://api.test/api/upload/game" && call.method === "POST"), false);
+    assert.equal(calls.some((call) => call.url === "https://www.oasiz.gg/api/upload/game" && call.method === "POST"), false);
+    assert.equal(calls.some((call) => call.url === "https://www.oasiz.gg/api/upload/activate" && call.method === "POST"), false);
     assert.ok(calls.find((call) => call.url.endsWith("/init") && call.method === "POST"));
     assert.ok(calls.find((call) => call.url.endsWith("/presign") && call.method === "POST"));
     assert.ok(calls.find((call) => call.url.endsWith("/sync-html") && call.method === "POST"));
     assert.ok(calls.find((call) => call.url.endsWith("/thumbnail") && call.method === "POST"));
+    assert.ok(calls.find((call) => call.url.endsWith("/api/games/game-123/publish-live") && call.method === "POST"));
 
     const initCall = calls.find((call) => call.url.endsWith("/init"));
     assert.ok(initCall);
     const initBody = JSON.parse(initCall.body) as {
+      isPublic?: boolean;
       runtimeManifest?: { runtime?: string; engine?: string; orientation?: string };
     };
+    assert.equal(initBody.isPublic, true);
     assert.equal(initBody.runtimeManifest?.runtime, "web");
     assert.equal(initBody.runtimeManifest?.engine, "phaser");
     assert.equal(initBody.runtimeManifest?.orientation, "landscape");
@@ -634,20 +706,24 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
     const presignCall = calls.find((call) => call.url.endsWith("/presign"));
     assert.ok(presignCall);
     const presignBody = JSON.parse(presignCall.body) as {
+      bundleVersion?: string;
       assets: Array<{
         path: string;
         contentType: string;
+        contentEncoding?: string;
         role?: string;
         sha256?: string;
         sizeBytes?: number;
       }>;
     };
+    assert.match(presignBody.bundleVersion ?? "", /^\d+$/);
     assert.deepEqual(
-      presignBody.assets.map((asset) => [asset.path, asset.contentType]).sort(),
+      presignBody.assets.map((asset) => [asset.path, asset.contentType, asset.contentEncoding ?? "", asset.role ?? ""]).sort(),
       [
-        ["assets/config.json", "application/json"],
-        ["assets/index.js", "application/javascript"],
-        ["images/pic.png", "image/png"],
+        ["assets/config.json", "application/json", "", "asset"],
+        ["assets/game.data.br", "application/octet-stream", "br", "data"],
+        ["assets/index.js", "application/javascript", "", "asset"],
+        ["images/pic.png", "image/png", "", "asset"],
       ],
     );
     assert.ok(presignBody.assets.every((asset) => asset.sha256 && asset.sizeBytes));
@@ -664,24 +740,31 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
         sizeBytes?: number;
       }>;
       assets?: unknown;
+      bundleVersion?: string;
       runtimeManifest?: { runtime?: string; engine?: string };
     };
     assert.equal("assets" in syncBody, false);
-    assert.deepEqual(syncBody.allAssetPaths.sort(), ["assets/config.json", "assets/index.js", "images/pic.png"]);
+    assert.equal(syncBody.bundleVersion, presignBody.bundleVersion);
+    assert.deepEqual(syncBody.allAssetPaths.sort(), ["assets/config.json", "assets/game.data.br", "assets/index.js", "images/pic.png"]);
     assert.equal(syncBody.runtimeManifest?.engine, "phaser");
     assert.deepEqual(
       syncBody.assetFiles?.map((asset) => [asset.path, asset.r2Key, asset.role]).sort(),
       [
-        ["assets/config.json", "game-assets/game-123/assets/config.json", "asset"],
-        ["assets/index.js", "game-assets/game-123/assets/index.js", "asset"],
-        ["images/pic.png", "game-assets/game-123/images/pic.png", "asset"],
+        ["assets/config.json", `game-bundles/game-123/${presignBody.bundleVersion}/assets/config.json`, "asset"],
+        ["assets/game.data.br", `game-bundles/game-123/${presignBody.bundleVersion}/assets/game.data.br`, "data"],
+        ["assets/index.js", `game-bundles/game-123/${presignBody.bundleVersion}/assets/index.js`, "asset"],
+        ["images/pic.png", `game-bundles/game-123/${presignBody.bundleVersion}/images/pic.png`, "asset"],
       ],
     );
     assert.ok(syncBody.assetFiles?.every((asset) => asset.sha256 && asset.sizeBytes));
 
+    const publishCall = calls.find((call) => call.url.endsWith("/api/games/game-123/publish-live"));
+    assert.ok(publishCall);
+    assert.deepEqual(JSON.parse(publishCall.body), { versionId: "draft-sync" });
+
     const jsonPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/config.json")));
     assert.ok(jsonPut);
-    assert.match(jsonPut.body, /https:\/\/cdn\.test\/game-assets\/game-123\/images\/pic\.png/);
+    assert.match(jsonPut.body, new RegExp(`https://cdn\\.test/game-bundles/game-123/${presignBody.bundleVersion}/images/pic\\.png`));
 
     const rewrittenConfig = Buffer.from(String(jsonPut.body));
     const configAsset = syncBody.assetFiles?.find((asset) => asset.path === "assets/config.json");
@@ -689,8 +772,12 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
 
     const jsPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/index.js")));
     assert.ok(jsPut);
-    assert.match(jsPut.body, /https:\/\/cdn\.test\/game-assets\/game-123\/assets\/config\.json/);
-    assert.match(jsPut.body, /https:\/\/cdn\.test\/game-assets\/game-123\/images\/pic\.png/);
+    assert.match(jsPut.body, new RegExp(`https://cdn\\.test/game-bundles/game-123/${presignBody.bundleVersion}/assets/config\\.json`));
+    assert.match(jsPut.body, new RegExp(`https://cdn\\.test/game-bundles/game-123/${presignBody.bundleVersion}/images/pic\\.png`));
+
+    const encodedPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/game.data.br")));
+    assert.ok(encodedPut);
+    assert.equal(new Headers(encodedPut.headers).get("Content-Encoding"), "br");
   });
 });
 

@@ -40,6 +40,7 @@ namespace Oasiz
   ///   OasizSDK.TriggerHaptic(HapticType.Medium);
   ///   OasizSDK.OpenInviteModal();
   ///   OasizSDK.EnableLogOverlay(new LogOverlayOptions { Collapsed = true });
+  ///   GraphicsPerformanceMetric graphics = OasizSDK.GetGraphicsPerformance();
   ///   ViewportInsets insets = OasizSDK.GetViewportInsets();
   ///   float safeTop = OasizSDK.GetSafeAreaTop();
   ///   OasizSDK.SetLeaderboardVisible(false);
@@ -505,6 +506,30 @@ namespace Oasiz
     }
 
     // -------------------------------------------------------------------------
+    // Performance
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Return a normalized graphics performance recommendation for the current
+    /// device. <see cref="GraphicsPerformanceMetric.fps"/> is the recommended
+    /// frame-rate target and
+    /// <see cref="GraphicsPerformanceMetric.tier"/> is <c>minimal</c>,
+    /// <c>low</c>, <c>medium</c>, or <c>high</c>. Use it to choose render
+    /// scale, particles, shadows, post-processing, and similar visual settings.
+    /// </summary>
+    public static GraphicsPerformanceMetric GetGraphicsPerformance()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+      return DeserializeGraphicsPerformanceMetric(OasizGetGraphicsPerformance());
+#else
+      return EstimateGraphicsPerformance();
+#endif
+    }
+
+    /// <summary>Alias for <see cref="GetGraphicsPerformance"/>.</summary>
+    public static GraphicsPerformanceMetric GraphicsPerformance => GetGraphicsPerformance();
+
+    // -------------------------------------------------------------------------
     // Navigation
     // -------------------------------------------------------------------------
 
@@ -517,6 +542,26 @@ namespace Oasiz
       OasizLeaveGame();
 #else
       Debug.Log("[OasizSDK] LeaveGame() — bridge unavailable in Editor.");
+#endif
+    }
+
+    /// <summary>
+    /// Installs a local browser bridge for testing back-button override behavior
+    /// in WebGL builds outside the Oasiz app. Press Escape, use the browser Back
+    /// button, or dispatch an <c>oasiz:back</c> event to exercise subscribed
+    /// back handlers. This is intended for local development only.
+    /// </summary>
+    public static void EnableBackButtonTesting(bool keyboard = true, bool browserHistory = true, bool log = false)
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+      _ = Instance;
+      OasizEnableBackButtonTesting(keyboard ? 1 : 0, browserHistory ? 1 : 0, log ? 1 : 0);
+      if (_backListenerCount > 0)
+      {
+        SetBackOverride(true);
+      }
+#else
+      Debug.Log("[OasizSDK] EnableBackButtonTesting() is only active in WebGL browser builds.");
 #endif
     }
 
@@ -917,6 +962,149 @@ namespace Oasiz
       }
     }
 
+    private static GraphicsPerformanceMetric DeserializeGraphicsPerformanceMetric(string json)
+    {
+      if (string.IsNullOrEmpty(json))
+      {
+        return EstimateGraphicsPerformance();
+      }
+
+      try
+      {
+        var metric = JsonUtility.FromJson<GraphicsPerformanceMetric>(json);
+        return NormalizeGraphicsPerformanceMetric(metric.fps, metric.tier);
+      }
+      catch (Exception e)
+      {
+        Debug.LogWarning("[OasizSDK] Failed to deserialize GraphicsPerformanceMetric: " + e.Message);
+        return EstimateGraphicsPerformance();
+      }
+    }
+
+    private static GraphicsPerformanceMetric EstimateGraphicsPerformance()
+    {
+      int score = 45;
+
+      int systemMemory = SystemInfo.systemMemorySize;
+      if (systemMemory > 0)
+      {
+        if (systemMemory <= 1024) score -= 18;
+        else if (systemMemory <= 2048) score -= 10;
+        else if (systemMemory >= 8192) score += 16;
+        else if (systemMemory >= 6144) score += 10;
+      }
+
+      int graphicsMemory = SystemInfo.graphicsMemorySize;
+      if (graphicsMemory > 0)
+      {
+        if (graphicsMemory <= 512) score -= 12;
+        else if (graphicsMemory >= 4096) score += 12;
+        else if (graphicsMemory >= 2048) score += 8;
+      }
+
+      int cores = SystemInfo.processorCount;
+      if (cores > 0)
+      {
+        if (cores <= 2) score -= 12;
+        else if (cores >= 8) score += 12;
+        else if (cores >= 6) score += 8;
+      }
+
+      int maxTextureSize = SystemInfo.maxTextureSize;
+      if (maxTextureSize >= 8192) score += 10;
+      else if (maxTextureSize >= 4096) score += 3;
+      else if (maxTextureSize > 0) score -= 8;
+
+      if (SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null)
+      {
+        score -= 25;
+      }
+      else
+      {
+        score += 8;
+      }
+
+      return GraphicsPerformanceMetricFromScore(score);
+    }
+
+    private static GraphicsPerformanceMetric NormalizeGraphicsPerformanceMetric(int fps, string tier)
+    {
+      string normalizedTier = NormalizeGraphicsPerformanceTier(tier);
+      int normalizedFps = fps > 0
+        ? Mathf.Clamp(fps, 1, 240)
+        : (!string.IsNullOrEmpty(normalizedTier)
+          ? DefaultFpsForGraphicsPerformanceTier(normalizedTier)
+          : 45);
+
+      if (string.IsNullOrEmpty(normalizedTier))
+      {
+        normalizedTier = TierFromGraphicsPerformanceFps(normalizedFps);
+      }
+
+      return new GraphicsPerformanceMetric(normalizedFps, normalizedTier);
+    }
+
+    private static GraphicsPerformanceMetric GraphicsPerformanceMetricFromScore(int score)
+    {
+      int normalizedScore = Mathf.Clamp(score, 0, 100);
+      string tier = TierFromGraphicsPerformanceScore(normalizedScore);
+      return new GraphicsPerformanceMetric(DefaultFpsForGraphicsPerformanceTier(tier), tier);
+    }
+
+    private static string NormalizeGraphicsPerformanceTier(string tier)
+    {
+      if (string.IsNullOrEmpty(tier))
+      {
+        return null;
+      }
+
+      switch (tier.Trim().ToLowerInvariant())
+      {
+        case "high":
+          return "high";
+        case "medium":
+          return "medium";
+        case "low":
+          return "low";
+        case "minimal":
+        case "safe":
+          return "minimal";
+        default:
+          return null;
+      }
+    }
+
+    private static string TierFromGraphicsPerformanceScore(int score)
+    {
+      if (score < 25) return "minimal";
+      if (score < 40) return "low";
+      if (score < 70) return "medium";
+      return "high";
+    }
+
+    private static string TierFromGraphicsPerformanceFps(int fps)
+    {
+      if (fps < 30) return "minimal";
+      if (fps < 45) return "low";
+      if (fps < 58) return "medium";
+      return "high";
+    }
+
+    private static int DefaultFpsForGraphicsPerformanceTier(string tier)
+    {
+      switch (tier)
+      {
+        case "high":
+          return 60;
+        case "minimal":
+          return 24;
+        case "low":
+          return 30;
+        default:
+          return 45;
+      }
+    }
+
     private static Dictionary<string, object> ParseJsonObject(string json)
     {
       // Minimal JSON object parser — handles flat key/value pairs.
@@ -964,7 +1152,9 @@ namespace Oasiz
     [DllImport("__Internal")] private static extern void OasizFlushGameState();
     [DllImport("__Internal")] private static extern float OasizGetViewportInset(string side);
     [DllImport("__Internal")] private static extern void OasizSetLeaderboardVisible(int visible);
+    [DllImport("__Internal")] private static extern string OasizGetGraphicsPerformance();
     [DllImport("__Internal")] private static extern void OasizLeaveGame();
+    [DllImport("__Internal")] private static extern void OasizEnableBackButtonTesting(int keyboard, int browserHistory, int log);
     [DllImport("__Internal")] private static extern void OasizSetBackOverride(int active);
     [DllImport("__Internal")] private static extern void OasizShareRoomCode(string roomCode, string optionsJson);
     [DllImport("__Internal")] private static extern void OasizOpenInviteModal();
