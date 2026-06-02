@@ -1,0 +1,14 @@
+interface:
+  display_name: "Oasiz Linear Learning"
+  short_description: "Track Oasiz game-dev learnings in Linear"
+  icon_small: "./assets/oasiz-linear-learning.svg"
+  icon_large: "./assets/oasiz-linear-learning.svg"
+  brand_color: "#00A1E4"
+  default_prompt: "Use $linear-game-dev-journal while developing this Oasiz game so the Oasiz Linear developer workspace captures progress and reusable learnings."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "linear"
+      description: "Oasiz Linear developer workspace access for issues, projects, documents, comments, and status updates"
+policy:
+  allow_implicit_invocation: true

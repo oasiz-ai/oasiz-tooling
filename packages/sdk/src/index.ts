@@ -1,5 +1,11 @@
 import { getPlayerCharacter } from "./character.ts";
 import { triggerHaptic } from "./haptics.ts";
+import {
+  getJibbleAnimationId,
+  JIBBLE_ANIMATION,
+  JIBBLE_ANIMATION_IDS,
+  JIBBLE_DIRECTIONS,
+} from "./jibble.ts";
 import { enableLogOverlay } from "./log-overlay.ts";
 import {
   getGameId,
@@ -17,9 +23,27 @@ import { flushGameState, loadGameState, saveGameState } from "./state.ts";
 import { onPause, onResume } from "./lifecycle.ts";
 import { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+import {
+  getSamplePlayerCharacter,
+  getSampleTextureAtlas,
+} from "./sample-character.ts";
 
 export { getPlayerCharacter } from "./character.ts";
+export type { GetPlayerCharacterOptions } from "./character.ts";
 export { triggerHaptic } from "./haptics.ts";
+export {
+  getJibbleAnimationId,
+  JIBBLE_ANIMATION,
+  JIBBLE_ANIMATION_IDS,
+  JIBBLE_DIRECTIONS,
+  normalizeJibbleDirection,
+} from "./jibble.ts";
+export type {
+  JibbleAnimationAction,
+  JibbleAnimationId,
+  JibbleDirectionCode,
+  JibbleFacingDirection,
+} from "./jibble.ts";
 export { enableLogOverlay } from "./log-overlay.ts";
 export {
   getGameId,
@@ -38,6 +62,10 @@ export { flushGameState, loadGameState, saveGameState } from "./state.ts";
 export { onPause, onResume } from "./lifecycle.ts";
 export { getSafeAreaTop, setLeaderboardVisible } from "./layout.ts";
 export { leaveGame, onBackButton, onLeaveGame } from "./navigation.ts";
+export {
+  getSamplePlayerCharacter,
+  getSampleTextureAtlas,
+} from "./sample-character.ts";
 export type { Unsubscribe } from "./lifecycle.ts";
 export type {
   FacingFrameMap,
@@ -57,9 +85,15 @@ export type {
 
 export const oasiz = {
   submitScore,
+  getJibbleAnimationId,
+  jibbleAnimations: JIBBLE_ANIMATION,
+  jibbleAnimationIds: JIBBLE_ANIMATION_IDS,
+  jibbleDirections: JIBBLE_DIRECTIONS,
   addScore,
   setScore,
   getPlayerCharacter,
+  getSamplePlayerCharacter,
+  getSampleTextureAtlas,
   share,
   triggerHaptic,
   enableLogOverlay,

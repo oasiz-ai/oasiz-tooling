@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oasiz CLI Usage"
+  short_description: "Guide Oasiz CLI publishing flows"
+  default_prompt: "Use $oasiz-cli-usage to publish and manage this Oasiz game from the CLI."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Oasiz SDK Usage"
+  short_description: "Guide Oasiz SDK game integrations"
+  default_prompt: "Use $oasiz-sdk-usage to integrate the Oasiz SDK in this game."

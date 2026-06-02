@@ -48,4 +48,11 @@ The GitHub Actions workflows live in `.github/workflows/sdk-tests.yml` and
 
 The CLI package is configured the same way, using
 `.github/workflows/cli-tests.yml` and `.github/workflows/cli-release.yml`.
+
+## Developer Site
+
+The static developer site lives in `apps/site` and is served at `/developers/*`
+by a Cloudflare Worker. Use `npm run developers:dev` for local Vite
+development, `npm run developers:edge:dev` for local Worker preview, and
+`npm run developers:edge:deploy` to deploy the Worker and static assets.
 # oasiz-tooling

@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { enableLogOverlay, oasiz } from "../src/index.ts";
+import {
+  enableLogOverlay,
+  getPlayerCharacter,
+  getJibbleAnimationId,
+  getSamplePlayerCharacter,
+  JIBBLE_ANIMATION,
+  JIBBLE_ANIMATION_IDS,
+  JIBBLE_DIRECTIONS,
+  oasiz,
+} from "../src/index.ts";
 import {
   getSafeAreaTop,
   setLeaderboardVisible,
@@ -39,6 +48,25 @@ function withoutWindow<T>(run: () => T): T {
     return run();
   } finally {
     globalScope.window = originalWindow;
+  }
+}
+
+function withFetch<T>(value: unknown, run: () => T): T {
+  const globalScope = globalThis as typeof globalThis & { fetch?: unknown };
+  const originalFetch = globalScope.fetch;
+  if (value === undefined) {
+    delete globalScope.fetch;
+  } else {
+    globalScope.fetch = value;
+  }
+  try {
+    return run();
+  } finally {
+    if (originalFetch === undefined) {
+      delete globalScope.fetch;
+    } else {
+      globalScope.fetch = originalFetch;
+    }
   }
 }
 
@@ -150,6 +178,133 @@ function flattenText(node: FakeElement): string {
   }
   return parts.join("\n");
 }
+
+test("jibble animation helpers expose stable animation ids", () => {
+  assert.equal(JIBBLE_ANIMATION.Idle.South, "idle_s");
+  assert.equal(JIBBLE_ANIMATION.Walk.North, "walk_n");
+  assert.equal(JIBBLE_ANIMATION.Backflip, "backflip");
+  assert.equal(getJibbleAnimationId("walk", "back"), "walk_n");
+  assert.equal(getJibbleAnimationId("walk", "right"), "walk_e");
+  assert.equal(getJibbleAnimationId("walk", "north"), "walk_n");
+  assert.equal(getJibbleAnimationId("walk", "front-right"), "walk_se");
+  assert.equal(getJibbleAnimationId("walk", "back-left"), "walk_nw");
+  assert.equal(getJibbleAnimationId("idle", "forward"), "idle_s");
+  assert.equal(getJibbleAnimationId("idle", "forth"), "idle_s");
+  assert.equal(getJibbleAnimationId("idle", "front"), "idle_s");
+  assert.equal(getJibbleAnimationId("backflip", "nw"), "backflip");
+  assert.equal(oasiz.getJibbleAnimationId("walk", "left"), "walk_w");
+  assert.equal(oasiz.jibbleAnimations.Walk.SouthEast, "walk_se");
+  assert.deepEqual([...JIBBLE_DIRECTIONS], ["n", "ne", "e", "se", "s", "sw", "w", "nw"]);
+  assert.ok(JIBBLE_ANIMATION_IDS.includes("idle_n"));
+  assert.ok(JIBBLE_ANIMATION_IDS.includes("walk_sw"));
+  assert.ok(JIBBLE_ANIMATION_IDS.includes("backflip"));
+});
+
+test("getPlayerCharacter fetches the platform sample atlas on localhost without the app bridge", async () => {
+  const platformCharacter = getSamplePlayerCharacter();
+  platformCharacter.characterName = "Oasiz Sample Jibble";
+  platformCharacter.baseCharacterId = "jibbles";
+  platformCharacter.compositionCode = "jibbles-sdk-sample";
+  platformCharacter.textureAtlas.imageUrl =
+    "https://assets.oasiz.ai/characters/jibbles/jibbles-sdk-sample/atlas.png";
+
+  const character = await withWindow(
+    { location: { protocol: "http:", hostname: "localhost" } },
+    () =>
+      withFetch(
+        async () =>
+          ({
+            ok: true,
+            json: async () => ({ ok: true, character: platformCharacter }),
+          }) as Response,
+        () => getPlayerCharacter(),
+      ),
+  );
+
+  assert.ok(character);
+  assert.equal(character.characterName, "Oasiz Sample Jibble");
+  assert.equal(character.baseCharacterId, "jibbles");
+  assert.ok(character.textureAtlas.imageUrl.startsWith("https://assets.oasiz.ai/"));
+
+  const animationIds = new Set(
+    character.textureAtlas.animations.map((animation) => animation.animationId),
+  );
+  for (const animationId of JIBBLE_ANIMATION_IDS) {
+    assert.ok(animationIds.has(animationId), `missing sample animation ${animationId}`);
+  }
+});
+
+test("getPlayerCharacter falls back to the generated sample when the platform sample is unavailable", async () => {
+  const character = await withWindow(
+    { location: { protocol: "http:", hostname: "localhost" } },
+    () =>
+      withFetch(
+        async () => ({ ok: false, json: async () => ({}) }) as Response,
+        () => getPlayerCharacter(),
+      ),
+  );
+
+  assert.equal(character?.characterName, "SDK Sample Jibble");
+  assert.ok(character?.textureAtlas.imageUrl.startsWith("data:image/svg+xml"));
+
+  const strict = await withWindow(
+    { location: { protocol: "http:", hostname: "localhost" } },
+    () =>
+      withFetch(
+        async () => ({ ok: false, json: async () => ({}) }) as Response,
+        () => getPlayerCharacter({ generatedFallback: false }),
+      ),
+  );
+  assert.equal(strict, null);
+});
+
+test("getPlayerCharacter local fallback can be disabled or forced", async () => {
+  const disabled = await withWindow(
+    { location: { protocol: "http:", hostname: "localhost" } },
+    () => getPlayerCharacter({ localFallback: false }),
+  );
+  assert.equal(disabled, null);
+
+  const forced = await withoutWindow(() =>
+    withFetch(
+      async () => ({ ok: false, json: async () => ({}) }) as Response,
+      () => getPlayerCharacter({ localFallback: true }),
+    ),
+  );
+  assert.equal(forced?.baseCharacterId, "sdk-sample-jibble");
+});
+
+test("getPlayerCharacter does not use the sample when a bridge is present", async () => {
+  const bridgeResult = getSamplePlayerCharacter();
+  bridgeResult.characterName = "Bridge Character";
+
+  const character = await withWindow(
+    {
+      location: { protocol: "http:", hostname: "localhost" },
+      __oasizGetPlayerCharacter: async () => bridgeResult,
+    },
+    () => getPlayerCharacter(),
+  );
+  assert.equal(character?.characterName, "Bridge Character");
+
+  const noCharacter = await withWindow(
+    {
+      location: { protocol: "http:", hostname: "localhost" },
+      __oasizGetPlayerCharacter: async () => null,
+    },
+    () => getPlayerCharacter(),
+  );
+  assert.equal(noCharacter, null);
+});
+
+test("getPlayerCharacter keeps remote non-app pages null by default", async () => {
+  const character = await withWindow(
+    { location: { protocol: "https:", hostname: "example.com" } },
+    () => getPlayerCharacter(),
+  );
+
+  assert.equal(character, null);
+});
 
 function withBrowser<T>(
   options: {

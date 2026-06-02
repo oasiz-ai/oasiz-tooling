@@ -1,0 +1,17 @@
+{
+  "name": "@oasiz/developer-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4174",
+    "edge:dev": "npm run build && wrangler dev",
+    "deploy": "npm run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260528.0",
+    "vite": "^7.1.7",
+    "wrangler": "^4.50.0"
+  }
+}

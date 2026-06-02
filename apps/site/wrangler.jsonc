@@ -1,0 +1,36 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "oasiz-developers",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-05-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist",
+    "html_handling": "none",
+    "not_found_handling": "none",
+    "run_worker_first": true
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 0.1
+  },
+  "routes": [
+    {
+      "pattern": "oasiz.gg/developers*",
+      "zone_name": "oasiz.gg"
+    },
+    {
+      "pattern": "www.oasiz.gg/developers*",
+      "zone_name": "oasiz.gg"
+    },
+    {
+      "pattern": "oasiz.ai/developers*",
+      "zone_name": "oasiz.ai"
+    },
+    {
+      "pattern": "www.oasiz.ai/developers*",
+      "zone_name": "oasiz.ai"
+    }
+  ]
+}
