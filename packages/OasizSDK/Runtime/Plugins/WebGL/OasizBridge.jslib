@@ -33,6 +33,53 @@ var OasizBridge = {
     SendMessage(oasizUnityBridgeState.gameObjectName, "_OnAsyncResponseFromJS", requestId + "|" + json);
   },
 
+  $oasizNormalizeBotResult: function (result) {
+    if (!result || !Array.isArray(result.bots)) {
+      return result;
+    }
+
+    function safeJson(value, fallback) {
+      try {
+        return JSON.stringify(value == null ? fallback : value);
+      } catch (e) {
+        return JSON.stringify(fallback);
+      }
+    }
+
+    function cloneObject(value) {
+      var clone = {};
+      if (!value || typeof value !== "object") {
+        return clone;
+      }
+      Object.keys(value).forEach(function (key) {
+        clone[key] = value[key];
+      });
+      return clone;
+    }
+
+    var normalized = cloneObject(result);
+    normalized.bots = result.bots.map(function (bot) {
+      var normalizedBot = cloneObject(bot);
+      normalizedBot.behaviorJson = safeJson(bot && bot.behavior, {});
+      normalizedBot.personalityJson = safeJson(bot && bot.personality, {});
+      delete normalizedBot.behavior;
+      delete normalizedBot.personality;
+
+      if (bot && bot.appearance && typeof bot.appearance === "object") {
+        var appearance = cloneObject(bot.appearance);
+        appearance.layerConfigJson = safeJson(bot.appearance.layerConfig, []);
+        appearance.renderLayersJson = safeJson(bot.appearance.renderLayers, []);
+        delete appearance.layerConfig;
+        delete appearance.renderLayers;
+        normalizedBot.appearance = appearance;
+      }
+
+      return normalizedBot;
+    });
+
+    return normalized;
+  },
+
   // ---------------------------------------------------------------------------
   // Score
   // ---------------------------------------------------------------------------
@@ -317,6 +364,35 @@ var OasizBridge = {
       })
       .catch(function (err) {
         console.error("[OasizSDK] getPlayerCharacter request failed:", err);
+        oasizSendAsyncResponse(requestId, null);
+      });
+  },
+
+  OasizRequestBots__deps: ["$oasizSendAsyncResponse", "$oasizNormalizeBotResult"],
+  OasizRequestBots: function (requestIdPtr, optionsJsonPtr) {
+    var requestId = UTF8ToString(requestIdPtr);
+    var optionsJson = UTF8ToString(optionsJsonPtr);
+    var options;
+    try {
+      options = JSON.parse(optionsJson || "{}");
+    } catch (e) {
+      console.error("[OasizSDK] requestBots failed to parse options JSON:", e);
+      oasizSendAsyncResponse(requestId, null);
+      return;
+    }
+
+    if (typeof window.__oasizRequestBots !== "function") {
+      console.warn("[OasizSDK] __oasizRequestBots bridge is unavailable.");
+      oasizSendAsyncResponse(requestId, null);
+      return;
+    }
+
+    Promise.resolve(window.__oasizRequestBots(options))
+      .then(function (result) {
+        oasizSendAsyncResponse(requestId, oasizNormalizeBotResult(result));
+      })
+      .catch(function (err) {
+        console.error("[OasizSDK] requestBots request failed:", err);
         oasizSendAsyncResponse(requestId, null);
       });
   },

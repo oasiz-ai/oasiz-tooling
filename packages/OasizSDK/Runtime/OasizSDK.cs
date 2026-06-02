@@ -153,7 +153,8 @@ namespace Oasiz
     private void _OnLeaveGameFromJS() => OnLeaveGame?.Invoke();
 
     // -------------------------------------------------------------------------
-    // Async response plumbing — used by GetPlayerCharacter, EditScore, SetScore
+    // Async response plumbing — used by GetPlayerCharacter, RequestBots,
+    // EditScore, SetScore
     // -------------------------------------------------------------------------
     //
     // Unity WebGL P/Invoke functions cannot return JS Promises. Instead, the
@@ -619,6 +620,33 @@ namespace Oasiz
 #endif
     }
 
+    /// <summary>
+    /// Request platform-managed bot profiles for the current game. Each bot
+    /// includes name, difficulty, characteristic, behavior/personality JSON,
+    /// and optionally a Jibble texture atlas appearance.
+    ///
+    /// Returns null when the host bridge is unavailable (for example in the
+    /// Unity Editor) or when the backend rejects the request.
+    /// </summary>
+    public static Task<BotRequestResult> RequestBots(BotRequestOptions options = null)
+    {
+      string optionsJson = BotRequestOptionsToJson(options ?? new BotRequestOptions());
+      if (optionsJson == null)
+      {
+        return Task.FromResult<BotRequestResult>(null);
+      }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+      var (id, task) = RegisterAsyncRequest();
+      OasizRequestBots(id, optionsJson);
+      return task.ContinueWith(t => DeserializeBotRequestResult(t.Result),
+        TaskContinuationOptions.ExecuteSynchronously);
+#else
+      Debug.Log("[OasizSDK] RequestBots(" + optionsJson + ") — bridge unavailable in Editor.");
+      return Task.FromResult<BotRequestResult>(null);
+#endif
+    }
+
     /// <summary>Player display name injected by the platform. Null when not set.</summary>
     public static string PlayerName
     {
@@ -809,6 +837,106 @@ namespace Oasiz
       return "{\"anchors\":" + anchors + "}";
     }
 
+    private static string BotRequestOptionsToJson(BotRequestOptions options)
+    {
+      if (options.Count < 0)
+      {
+        Debug.LogWarning("[OasizSDK] RequestBots Count must be zero or a positive integer.");
+        return null;
+      }
+
+      var parts = new List<string>();
+      if (options.Count > 0)
+      {
+        parts.Add("\"count\":" + options.Count);
+      }
+
+      string difficultyJson = BotDifficultyOptionsToJson(options);
+      if (difficultyJson == null)
+      {
+        return null;
+      }
+
+      if (difficultyJson.Length > 0)
+      {
+        parts.Add("\"difficulty\":" + difficultyJson);
+      }
+
+      string poolKey = string.IsNullOrEmpty(options.PoolKey) ? string.Empty : options.PoolKey.Trim();
+      if (poolKey.Length > 0)
+      {
+        parts.Add("\"poolKey\":\"" + EscapeJson(poolKey) + "\"");
+      }
+
+      string seed = string.IsNullOrEmpty(options.Seed) ? string.Empty : options.Seed.Trim();
+      if (seed.Length > 0)
+      {
+        parts.Add("\"seed\":\"" + EscapeJson(seed) + "\"");
+      }
+
+      if (options.IncludeAppearance.HasValue)
+      {
+        parts.Add("\"includeAppearance\":" + (options.IncludeAppearance.Value ? "true" : "false"));
+      }
+
+      return "{" + string.Join(",", parts) + "}";
+    }
+
+    private static string BotDifficultyOptionsToJson(BotRequestOptions options)
+    {
+      if (options.Difficulties != null && options.Difficulties.Length > 0)
+      {
+        var values = new List<string>();
+        var seen = new HashSet<string>();
+        foreach (var difficulty in options.Difficulties)
+        {
+          string value;
+          try
+          {
+            value = BotDifficultyToString(difficulty);
+          }
+          catch (ArgumentOutOfRangeException)
+          {
+            Debug.LogWarning("[OasizSDK] RequestBots received an unknown bot difficulty.");
+            return null;
+          }
+
+          if (seen.Add(value))
+          {
+            values.Add("\"" + value + "\"");
+          }
+        }
+
+        return "[" + string.Join(",", values) + "]";
+      }
+
+      if (!options.Difficulty.HasValue)
+      {
+        return string.Empty;
+      }
+
+      try
+      {
+        return "\"" + BotDifficultyToString(options.Difficulty.Value) + "\"";
+      }
+      catch (ArgumentOutOfRangeException)
+      {
+        Debug.LogWarning("[OasizSDK] RequestBots received an unknown bot difficulty.");
+        return null;
+      }
+    }
+
+    private static string BotDifficultyToString(BotDifficulty difficulty)
+    {
+      return difficulty switch
+      {
+        BotDifficulty.Easy   => "easy",
+        BotDifficulty.Medium => "medium",
+        BotDifficulty.Hard   => "hard",
+        _ => throw new ArgumentOutOfRangeException(nameof(difficulty), difficulty, null),
+      };
+    }
+
     private static string DictionaryToJson(Dictionary<string, object> dict)
     {
       if (dict == null || dict.Count == 0) return "{}";
@@ -857,6 +985,23 @@ namespace Oasiz
       catch (Exception e)
       {
         Debug.LogError("[OasizSDK] Failed to deserialize PlayerCharacter: " + e.Message);
+        return null;
+      }
+    }
+
+    private static BotRequestResult DeserializeBotRequestResult(string json)
+    {
+      if (string.IsNullOrEmpty(json))
+      {
+        return null;
+      }
+      try
+      {
+        return JsonUtility.FromJson<BotRequestResult>(json);
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[OasizSDK] Failed to deserialize BotRequestResult: " + e.Message);
         return null;
       }
     }
@@ -936,6 +1081,7 @@ namespace Oasiz
     [DllImport("__Internal")] private static extern string OasizGetPlayerName();
     [DllImport("__Internal")] private static extern string OasizGetPlayerAvatar();
     [DllImport("__Internal")] private static extern void OasizGetPlayerCharacter(string requestId);
+    [DllImport("__Internal")] private static extern void OasizRequestBots(string requestId, string optionsJson);
     [DllImport("__Internal")] private static extern void OasizEditScore(string requestId, string payloadJson);
     [DllImport("__Internal")] private static extern void OasizRegisterEventListeners(string gameObjectName);
 #endif

@@ -10,6 +10,7 @@ import {
   JIBBLE_ANIMATION_IDS,
   JIBBLE_DIRECTIONS,
   oasiz,
+  requestBots,
 } from "../src/index.ts";
 import {
   getSafeAreaTop,
@@ -304,6 +305,88 @@ test("getPlayerCharacter keeps remote non-app pages null by default", async () =
   );
 
   assert.equal(character, null);
+});
+
+test("requestBots forwards normalized platform bot options to the host bridge", async () => {
+  const calls: unknown[] = [];
+  const result = {
+    ok: true,
+    gameId: "game-1",
+    playerId: "player-1",
+    poolKey: "ranked",
+    source: "game_pool",
+    requestedCount: 2,
+    returnedCount: 1,
+    bots: [
+      {
+        id: "spark",
+        name: "Spark",
+        characteristic: "chases coins",
+        difficulty: "easy",
+        behavior: { target: "coins" },
+        personality: { mood: "bold" },
+        appearance: null,
+      },
+    ],
+  } as const;
+
+  const bots = await withWindow(
+    {
+      __oasizRequestBots: async (options: unknown) => {
+        calls.push(options);
+        return result;
+      },
+    },
+    () =>
+      requestBots({
+        count: 2,
+        difficulty: ["easy", "easy", "medium"],
+        poolKey: " ranked ",
+        seed: " match-1 ",
+        includeAppearance: false,
+      }),
+  );
+
+  assert.deepEqual(calls, [
+    {
+      count: 2,
+      difficulty: ["easy", "medium"],
+      poolKey: "ranked",
+      seed: "match-1",
+      includeAppearance: false,
+    },
+  ]);
+  assert.equal(bots?.bots[0]?.name, "Spark");
+  assert.equal(oasiz.requestBots, requestBots);
+});
+
+test("requestBots returns null without bridge or invalid options", async () => {
+  const missingBridge = await withoutWindow(() => requestBots({ count: 1 }));
+  assert.equal(missingBridge, null);
+
+  let calls = 0;
+  const invalidCount = await withWindow(
+    {
+      __oasizRequestBots: async () => {
+        calls += 1;
+        return null;
+      },
+    },
+    () => requestBots({ count: 0 }),
+  );
+  const invalidDifficulty = await withWindow(
+    {
+      __oasizRequestBots: async () => {
+        calls += 1;
+        return null;
+      },
+    },
+    () => requestBots({ difficulty: "nightmare" as "easy" }),
+  );
+
+  assert.equal(invalidCount, null);
+  assert.equal(invalidDifficulty, null);
+  assert.equal(calls, 0);
 });
 
 function withBrowser<T>(

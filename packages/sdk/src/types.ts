@@ -102,6 +102,59 @@ export interface PlayerCharacter {
 }
 
 // ============================================================================
+// Platform bots (mirrors POST /api/sdk/games/:id/bots/request)
+// ============================================================================
+
+export type PlatformBotDifficulty = "easy" | "medium" | "hard";
+
+export type PlatformBotSelectionSource =
+  | "game_pool"
+  | "platform_catalog"
+  | "platform_catalog_fallback";
+
+export type PlatformBotJsonObject = Record<string, unknown>;
+
+export interface BotRequestOptions {
+  count?: number;
+  difficulty?: PlatformBotDifficulty | PlatformBotDifficulty[];
+  poolKey?: string;
+  seed?: string;
+  includeAppearance?: boolean;
+}
+
+export interface PlatformBotAppearance {
+  kind: "jibble";
+  characterName: string | null;
+  baseCharacterId: string;
+  compositionCode: string;
+  layerConfig: unknown[];
+  renderLayers: unknown[];
+  textureAtlas: TextureAtlas;
+  editorTextureAtlas: TextureAtlas | null;
+}
+
+export interface PlatformBotProfile {
+  id: string;
+  name: string;
+  characteristic: string;
+  difficulty: PlatformBotDifficulty;
+  behavior: PlatformBotJsonObject;
+  personality: PlatformBotJsonObject;
+  appearance: PlatformBotAppearance | null;
+}
+
+export interface BotRequestResult {
+  ok: true;
+  gameId: string;
+  playerId: string;
+  poolKey: string;
+  source: PlatformBotSelectionSource;
+  requestedCount: number;
+  returnedCount: number;
+  bots: PlatformBotProfile[];
+}
+
+// ============================================================================
 // Score edit (mirrors POST /api/sdk/games/:id/score/edit)
 // ============================================================================
 

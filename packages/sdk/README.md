@@ -208,6 +208,101 @@ foreach (var animationId in JibbleAnimations.All)
 }
 ```
 
+### Platform bots
+
+Use `oasiz.requestBots()` when a game needs platform-managed opponents or NPCs
+with names, difficulty, characteristics, behavior, personality, and optional
+Jibble atlas appearance.
+
+The SDK forwards the request to the Oasiz host bridge
+`window.__oasizRequestBots(options)`. The host resolves that through the
+platform bot pool for the current game; unsupported local hosts return `null`
+instead of crashing.
+
+#### HTML5 / TypeScript
+
+```ts
+import { oasiz } from "@oasiz/sdk";
+
+const roster = await oasiz.requestBots({
+  count: 4,
+  difficulty: ["easy", "medium"],
+  poolKey: "default",
+  seed: "match-42",
+  includeAppearance: true,
+});
+
+if (!roster) {
+  // Bridge unavailable or backend rejected the request.
+  return;
+}
+
+for (const bot of roster.bots) {
+  console.log(bot.name, bot.difficulty, bot.characteristic);
+  console.log(bot.behavior, bot.personality);
+
+  const atlas = bot.appearance?.textureAtlas;
+  if (atlas) {
+    const idle = atlas.animations.find((anim) => anim.animationId === "idle_s");
+    console.log(idle?.frames);
+  }
+}
+```
+
+Options:
+
+| Option | Type | Notes |
+| --- | --- | --- |
+| `count` | `number` | Positive integer. Omit to use the platform default. |
+| `difficulty` | `"easy" \| "medium" \| "hard" \| Array<...>` | Filter by one or more difficulties. |
+| `poolKey` | `string` | Optional game-configured bot pool key, such as `"default"` or `"ranked"`. |
+| `seed` | `string` | Optional deterministic selection seed for repeatable rosters. |
+| `includeAppearance` | `boolean` | When true, bots can include a Jibble `textureAtlas` and `editorTextureAtlas`. |
+
+Result fields:
+
+| Field | Meaning |
+| --- | --- |
+| `gameId`, `playerId`, `poolKey` | Context used by the platform selection. |
+| `source` | `"game_pool"`, `"platform_catalog"`, or `"platform_catalog_fallback"`. |
+| `requestedCount`, `returnedCount` | Requested and returned roster counts. |
+| `bots[]` | Each bot has `id`, `name`, `characteristic`, `difficulty`, `behavior`, `personality`, and optional `appearance`. |
+| `bots[].appearance.textureAtlas` | Same atlas shape as `getPlayerCharacter().textureAtlas`, so the Jibble animation catalog above applies. |
+
+#### Unity
+
+```csharp
+using Oasiz;
+
+BotRequestResult roster = await OasizSDK.RequestBots(new BotRequestOptions
+{
+    Count = 4,
+    Difficulties = new[] { BotDifficulty.Easy, BotDifficulty.Medium },
+    PoolKey = "default",
+    Seed = "match-42",
+    IncludeAppearance = true,
+});
+
+if (roster == null) return;
+
+foreach (var bot in roster.bots)
+{
+    Debug.Log($"{bot.name} ({bot.difficulty}): {bot.characteristic}");
+    Debug.Log(bot.behaviorJson);
+    Debug.Log(bot.personalityJson);
+
+    TextureAtlas atlas = bot.appearance?.textureAtlas;
+    if (atlas != null)
+    {
+        Debug.Log(atlas.imageUrl);
+    }
+}
+```
+
+Unity exposes `behaviorJson`, `personalityJson`, `layerConfigJson`, and
+`renderLayersJson` as strings because Unity's built-in `JsonUtility` cannot
+deserialize arbitrary nested JSON objects.
+
 ### Score
 
 #### `oasiz.submitScore(score: number)`
@@ -538,6 +633,8 @@ All methods are also available as named exports if you prefer not to use the `oa
 
 ```ts
 import {
+  requestBots,
+  getPlayerCharacter,
   submitScore,
   share,
   triggerHaptic,
@@ -565,6 +662,8 @@ import {
 
 ```ts
 import type {
+  BotRequestOptions,
+  BotRequestResult,
   GameState,
   HapticType,
   LogOverlayEntry,
@@ -573,6 +672,7 @@ import type {
   LogOverlayOptions,
   ShareRequest,
   ShareRoomCodeOptions,
+  PlatformBotProfile,
   Unsubscribe,
 } from "@oasiz/sdk";
 ```
@@ -661,6 +761,8 @@ public class GameManager : MonoBehaviour
 | `oasiz.share(request)` | `OasizSDK.Share(ShareRequest)` |
 | `oasiz.shareRoomCode` | `OasizSDK.ShareRoomCode(string, ShareRoomCodeOptions)` |
 | `oasiz.openInviteModal()` | `OasizSDK.OpenInviteModal()` |
+| `oasiz.getPlayerCharacter()` | `OasizSDK.GetPlayerCharacter()` |
+| `oasiz.requestBots(options)` | `OasizSDK.RequestBots(BotRequestOptions)` |
 | `oasiz.gameId` / `roomCode` / ... | `OasizSDK.GameId` / `RoomCode` / `PlayerName` / `PlayerAvatar` |
 | -- | `OasizSDK.EmitScoreConfig(ScoreConfig)` → `window.emitScoreConfig` (Unity-only helper for normalized score UI) |
 | `oasiz.enableLogOverlay` | `OasizSDK.EnableLogOverlay(LogOverlayOptions)` (see note below) |
@@ -699,6 +801,52 @@ public class ShareRequest
 
 // Multiplayer invite options
 public class ShareRoomCodeOptions { public bool InviteOverride { get; set; } }
+
+// Platform bot roster
+public enum BotDifficulty { Easy, Medium, Hard }
+public class BotRequestOptions
+{
+    public int Count { get; set; }
+    public BotDifficulty? Difficulty { get; set; }
+    public BotDifficulty[] Difficulties { get; set; }
+    public string PoolKey { get; set; }
+    public string Seed { get; set; }
+    public bool? IncludeAppearance { get; set; }
+}
+
+public class BotRequestResult
+{
+    public string gameId;
+    public string playerId;
+    public string poolKey;
+    public string source;
+    public int requestedCount;
+    public int returnedCount;
+    public PlatformBotProfile[] bots;
+}
+
+public class PlatformBotProfile
+{
+    public string id;
+    public string name;
+    public string characteristic;
+    public string difficulty;
+    public string behaviorJson;
+    public string personalityJson;
+    public PlatformBotAppearance appearance;
+}
+
+public class PlatformBotAppearance
+{
+    public string kind;
+    public string characterName;
+    public string baseCharacterId;
+    public string compositionCode;
+    public string layerConfigJson;
+    public string renderLayersJson;
+    public TextureAtlas textureAtlas;
+    public TextureAtlas editorTextureAtlas;
+}
 
 // Log overlay configuration
 public class LogOverlayOptions

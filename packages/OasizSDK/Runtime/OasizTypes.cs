@@ -153,6 +153,95 @@ namespace Oasiz
   }
 
   // ===========================================================================
+  // Platform bots (mirrors POST /api/sdk/games/:id/bots/request)
+  // ===========================================================================
+
+  /// <summary>
+  /// Difficulty filter for platform-managed bot profiles.
+  /// </summary>
+  public enum BotDifficulty
+  {
+    Easy,
+    Medium,
+    Hard,
+  }
+
+  /// <summary>
+  /// Options for <see cref="OasizSDK.RequestBots"/>. Leave fields unset to use
+  /// the platform defaults for the current game.
+  /// </summary>
+  public sealed class BotRequestOptions
+  {
+    /// <summary>Requested number of bots. Leave 0 to let the platform choose.</summary>
+    public int Count { get; set; }
+
+    /// <summary>Optional single difficulty filter.</summary>
+    public BotDifficulty? Difficulty { get; set; }
+
+    /// <summary>Optional list of allowed difficulties. Takes precedence over Difficulty.</summary>
+    public BotDifficulty[] Difficulties { get; set; }
+
+    /// <summary>Optional game-configured bot pool key.</summary>
+    public string PoolKey { get; set; }
+
+    /// <summary>Optional deterministic selection seed.</summary>
+    public string Seed { get; set; }
+
+    /// <summary>When true, include each bot's Jibble atlas appearance when available.</summary>
+    public bool? IncludeAppearance { get; set; }
+  }
+
+  /// <summary>
+  /// Jibble atlas appearance for a platform bot. Layer details are preserved as
+  /// JSON strings because Unity's JsonUtility cannot deserialize arbitrary
+  /// nested objects.
+  /// </summary>
+  [Serializable]
+  public sealed class PlatformBotAppearance
+  {
+    public string kind;
+    public string characterName;
+    public string baseCharacterId;
+    public string compositionCode;
+    public string layerConfigJson;
+    public string renderLayersJson;
+    public TextureAtlas textureAtlas;
+    public TextureAtlas editorTextureAtlas;
+  }
+
+  /// <summary>
+  /// One platform-managed bot profile selected for the current game.
+  /// </summary>
+  [Serializable]
+  public sealed class PlatformBotProfile
+  {
+    public string id;
+    public string name;
+    public string characteristic;
+    public string difficulty;
+    public string behaviorJson;
+    public string personalityJson;
+    public PlatformBotAppearance appearance;
+  }
+
+  /// <summary>
+  /// Result from <see cref="OasizSDK.RequestBots"/>. The Task resolves to null
+  /// when the host bridge is unavailable or the backend rejects the request.
+  /// </summary>
+  [Serializable]
+  public sealed class BotRequestResult
+  {
+    public bool ok;
+    public string gameId;
+    public string playerId;
+    public string poolKey;
+    public string source;
+    public int requestedCount;
+    public int returnedCount;
+    public PlatformBotProfile[] bots;
+  }
+
+  // ===========================================================================
   // Score edit (mirrors POST /api/sdk/games/:id/score/edit)
   // ===========================================================================
 

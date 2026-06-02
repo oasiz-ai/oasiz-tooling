@@ -1,4 +1,5 @@
 import { getPlayerCharacter } from "./character.ts";
+import { requestBots } from "./bots.ts";
 import { triggerHaptic } from "./haptics.ts";
 import {
   getJibbleAnimationId,
@@ -30,6 +31,7 @@ import {
 
 export { getPlayerCharacter } from "./character.ts";
 export type { GetPlayerCharacterOptions } from "./character.ts";
+export { requestBots } from "./bots.ts";
 export { triggerHaptic } from "./haptics.ts";
 export {
   getJibbleAnimationId,
@@ -68,6 +70,8 @@ export {
 } from "./sample-character.ts";
 export type { Unsubscribe } from "./lifecycle.ts";
 export type {
+  BotRequestOptions,
+  BotRequestResult,
   FacingFrameMap,
   GameState,
   HapticType,
@@ -76,6 +80,11 @@ export type {
   LogOverlayLevel,
   LogOverlayOptions,
   PlayerCharacter,
+  PlatformBotAppearance,
+  PlatformBotDifficulty,
+  PlatformBotJsonObject,
+  PlatformBotProfile,
+  PlatformBotSelectionSource,
   ScoreEditResult,
   ShareRequest,
   TextureAtlas,
@@ -91,6 +100,7 @@ export const oasiz = {
   jibbleDirections: JIBBLE_DIRECTIONS,
   addScore,
   setScore,
+  requestBots,
   getPlayerCharacter,
   getSamplePlayerCharacter,
   getSampleTextureAtlas,
