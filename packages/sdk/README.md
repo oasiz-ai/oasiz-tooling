@@ -57,6 +57,65 @@ oasiz.enableLogOverlay({
 });
 ```
 
+### Platform lobby rooms
+
+Oasiz-owned platform lobbies are the default multiplayer shape. Games do not
+create room lists, invite screens, ready buttons, or start buttons inside the
+game runtime. The platform opens a lobby for the selected game, lists waiting
+rooms, lets the user create or join a room, collects mode/settings/readiness,
+and starts the game only after the host decides to launch.
+
+Declare the room shape in `publish.json`:
+
+```json
+{
+  "title": "Space Force",
+  "category": "action",
+  "multiplayer": {
+    "kind": "platform-lobby",
+    "schemaVersion": 1,
+    "minPlayers": 1,
+    "maxPlayers": 4,
+    "defaultModeId": "classic",
+    "readyPolicy": "all_non_host",
+    "transport": { "type": "custom" },
+    "modes": [
+      {
+        "id": "classic",
+        "label": "Classic",
+        "minPlayers": 1,
+        "maxPlayers": 4,
+        "settingsSchema": {
+          "durationMinutes": { "type": "integer", "min": 3, "max": 20, "default": 10 }
+        }
+      }
+    ]
+  }
+}
+```
+
+When the host starts the room, Oasiz injects a frozen launch context:
+
+```ts
+const launch = oasiz.getLaunchContext();
+
+if (launch) {
+  connectToGameTransport({
+    roomId: launch.roomId,
+    sessionId: launch.sessionId,
+    modeId: launch.modeId,
+    settings: launch.settings,
+    players: launch.players,
+    transport: launch.transport,
+  });
+}
+```
+
+`oasiz.getLaunchContext()` returns `null` in local development or single-player
+launches. Existing helpers such as `oasiz.gameId`, `oasiz.roomCode`,
+`oasiz.playerId`, `oasiz.playerName`, and `oasiz.playerAvatar` also fall back to
+the launch context when legacy globals are not injected.
+
 ### Player character animations
 
 Use the Jibble animation constants when wiring a player character atlas so you can reference known animation IDs during local development instead of publishing first and reading logs.
@@ -623,8 +682,13 @@ if (oasiz.roomCode) {
 }
 
 // Player identity for multiplayer games
+const playerId = oasiz.playerId;
 const name = oasiz.playerName;
 const avatar = oasiz.playerAvatar;
+
+// Platform-lobby launch snapshot
+const launch = oasiz.getLaunchContext();
+const isHost = oasiz.isHost;
 ```
 
 ### Named exports
@@ -652,7 +716,11 @@ import {
   onLeaveGame,
   leaveGame,
   getGameId,
+  getLaunchContext,
+  getLocalLaunchPlayer,
   getRoomCode,
+  isLaunchHost,
+  getPlayerId,
   getPlayerName,
   getPlayerAvatar,
 } from "@oasiz/sdk";
@@ -670,6 +738,8 @@ import type {
   LogOverlayHandle,
   LogOverlayLevel,
   LogOverlayOptions,
+  PlatformLobbyLaunchContext,
+  PlatformLobbyLaunchPlayer,
   ShareRequest,
   ShareRoomCodeOptions,
   PlatformBotProfile,
@@ -764,6 +834,7 @@ public class GameManager : MonoBehaviour
 | `oasiz.getPlayerCharacter()` | `OasizSDK.GetPlayerCharacter()` |
 | `oasiz.requestBots(options)` | `OasizSDK.RequestBots(BotRequestOptions)` |
 | `oasiz.gameId` / `roomCode` / ... | `OasizSDK.GameId` / `RoomCode` / `PlayerName` / `PlayerAvatar` |
+| `oasiz.getLaunchContext()` / `launchContext` | `OasizSDK.GetLaunchContext()` / `OasizSDK.LaunchContext` |
 | -- | `OasizSDK.EmitScoreConfig(ScoreConfig)` → `window.emitScoreConfig` (Unity-only helper for normalized score UI) |
 | `oasiz.enableLogOverlay` | `OasizSDK.EnableLogOverlay(LogOverlayOptions)` (see note below) |
 | -- | `OasizSDK.AppendLogOverlay(level, message, stackTrace)` (see note below) |
@@ -801,6 +872,37 @@ public class ShareRequest
 
 // Multiplayer invite options
 public class ShareRoomCodeOptions { public bool InviteOverride { get; set; } }
+
+// Platform lobby launch context
+public class PlatformLobbyLaunchContext
+{
+    public string gameId;
+    public string gameVersionId;
+    public string hostUserId;
+    public string localPlayerId;
+    public string modeId;
+    public PlatformLobbyLaunchPlayer[] players;
+    public string roomCode;
+    public string roomId;
+    public string sessionId;
+    public string settingsJson;
+    public string transportJson;
+}
+
+public class PlatformLobbyLaunchPlayer
+{
+    public string avatarUrl;
+    public string botProfileJson;
+    public bool connected;
+    public string displayName;
+    public bool isBot;
+    public string memberId;
+    public bool ready;
+    public string role;
+    public int slotIndex;
+    public string teamId;
+    public string userId;
+}
 
 // Platform bot roster
 public enum BotDifficulty { Easy, Medium, Hard }

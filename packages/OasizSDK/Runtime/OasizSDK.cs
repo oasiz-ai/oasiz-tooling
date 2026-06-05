@@ -601,6 +601,69 @@ namespace Oasiz
     }
 
     /// <summary>
+    /// Raw JSON platform launch context for the room that started this game.
+    /// Returns null when the game was not launched from a platform lobby room.
+    /// </summary>
+    public static string GetLaunchContextJson()
+    {
+#if UNITY_WEBGL && !UNITY_EDITOR
+      string val = OasizGetLaunchContext();
+      return string.IsNullOrEmpty(val) ? null : val;
+#else
+      return null;
+#endif
+    }
+
+    /// <summary>
+    /// Frozen platform-owned room payload injected when the host starts a room.
+    /// Read this after launch for mode, settings, roster, room/session IDs, and
+    /// transport config. Room creation, joining, readiness, and start decisions
+    /// happen in the platform lobby before the game loads.
+    /// </summary>
+    public static PlatformLobbyLaunchContext GetLaunchContext()
+    {
+      return DeserializeLaunchContext(GetLaunchContextJson());
+    }
+
+    /// <summary>Alias for <see cref="GetLaunchContext"/>.</summary>
+    public static PlatformLobbyLaunchContext LaunchContext => GetLaunchContext();
+
+    /// <summary>The local player's launch roster entry, or null when unavailable.</summary>
+    public static PlatformLobbyLaunchPlayer LocalLaunchPlayer
+    {
+      get
+      {
+        var context = GetLaunchContext();
+        if (context == null || string.IsNullOrEmpty(context.localPlayerId) || context.players == null)
+        {
+          return null;
+        }
+
+        foreach (var player in context.players)
+        {
+          if (player != null && player.userId == context.localPlayerId)
+          {
+            return player;
+          }
+        }
+
+        return null;
+      }
+    }
+
+    /// <summary>True when the local player is the platform room host.</summary>
+    public static bool IsHost
+    {
+      get
+      {
+        var context = GetLaunchContext();
+        return context != null &&
+          !string.IsNullOrEmpty(context.localPlayerId) &&
+          context.localPlayerId == context.hostUserId;
+      }
+    }
+
+    /// <summary>
     /// Fetch the authenticated player's character, including a TexturePacker /
     /// Phaser-style texture atlas describing the baked sprite image. Returns
     /// null when the user has no character composition or when the bridge is
@@ -972,6 +1035,23 @@ namespace Oasiz
       return s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r").Replace("\t", "\\t");
     }
 
+    private static PlatformLobbyLaunchContext DeserializeLaunchContext(string json)
+    {
+      if (string.IsNullOrEmpty(json))
+      {
+        return null;
+      }
+      try
+      {
+        return JsonUtility.FromJson<PlatformLobbyLaunchContext>(json);
+      }
+      catch (Exception e)
+      {
+        Debug.LogError("[OasizSDK] Failed to deserialize PlatformLobbyLaunchContext: " + e.Message);
+        return null;
+      }
+    }
+
     private static PlayerCharacter DeserializePlayerCharacter(string json)
     {
       if (string.IsNullOrEmpty(json))
@@ -1078,6 +1158,7 @@ namespace Oasiz
     [DllImport("__Internal")] private static extern string OasizGetGameId();
     [DllImport("__Internal")] private static extern string OasizGetRoomCode();
     [DllImport("__Internal")] private static extern string OasizGetPlayerId();
+    [DllImport("__Internal")] private static extern string OasizGetLaunchContext();
     [DllImport("__Internal")] private static extern string OasizGetPlayerName();
     [DllImport("__Internal")] private static extern string OasizGetPlayerAvatar();
     [DllImport("__Internal")] private static extern void OasizGetPlayerCharacter(string requestId);

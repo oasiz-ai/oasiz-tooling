@@ -31,6 +31,49 @@ namespace Oasiz
   }
 
   /// <summary>
+  /// One player in the platform-owned room roster at the moment the host
+  /// started the game. This is a frozen launch snapshot, not a live presence
+  /// object.
+  /// </summary>
+  [Serializable]
+  public sealed class PlatformLobbyLaunchPlayer
+  {
+    public string avatarUrl;
+    public string botProfileJson;
+    public bool connected;
+    public string displayName;
+    public bool isBot;
+    public string memberId;
+    public bool ready;
+    public string role;
+    public int slotIndex;
+    public string teamId;
+    public string userId;
+  }
+
+  /// <summary>
+  /// Platform-owned room payload injected when Oasiz starts a game from a
+  /// lobby room. Games read this after launch for mode, settings, roster,
+  /// room/session IDs, and transport config. The platform owns room creation,
+  /// joining, readiness, and the start decision before this payload exists.
+  /// </summary>
+  [Serializable]
+  public sealed class PlatformLobbyLaunchContext
+  {
+    public string gameId;
+    public string gameVersionId;
+    public string hostUserId;
+    public string localPlayerId;
+    public string modeId;
+    public PlatformLobbyLaunchPlayer[] players;
+    public string roomCode;
+    public string roomId;
+    public string sessionId;
+    public string settingsJson;
+    public string transportJson;
+  }
+
+  /// <summary>
   /// Haptic feedback intensity type.
   /// </summary>
   public enum HapticType

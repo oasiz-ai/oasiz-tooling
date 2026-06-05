@@ -80,6 +80,85 @@ var OasizBridge = {
     return normalized;
   },
 
+  $oasizAllocString: function (value) {
+    var val = value == null ? "" : String(value);
+    var bufferSize = lengthBytesUTF8(val) + 1;
+    var buffer = _malloc(bufferSize);
+    stringToUTF8(val, buffer, bufferSize);
+    return buffer;
+  },
+
+  $oasizReadLaunchContext: function () {
+    if (typeof window.__oasizGetLaunchContext === "function") {
+      try {
+        return window.__oasizGetLaunchContext();
+      } catch (e) {
+        console.error("[OasizSDK] __oasizGetLaunchContext failed:", e);
+        return null;
+      }
+    }
+    return window.__OASIZ_LAUNCH_CONTEXT__ || null;
+  },
+
+  $oasizLocalLaunchPlayer: function (context) {
+    if (!context || !Array.isArray(context.players)) {
+      return null;
+    }
+    var localPlayerId = context.localPlayerId || window.__PLAYER_ID__;
+    if (!localPlayerId) {
+      return null;
+    }
+    for (var i = 0; i < context.players.length; i += 1) {
+      var player = context.players[i];
+      if (player && player.userId === localPlayerId) {
+        return player;
+      }
+    }
+    return null;
+  },
+
+  $oasizNormalizeLaunchContextForUnity: function (context) {
+    if (!context || typeof context !== "object") {
+      return null;
+    }
+
+    function safeJson(value, fallback) {
+      try {
+        return JSON.stringify(value == null ? fallback : value);
+      } catch (e) {
+        return JSON.stringify(fallback);
+      }
+    }
+
+    function cloneObject(value) {
+      var clone = {};
+      if (!value || typeof value !== "object") {
+        return clone;
+      }
+      Object.keys(value).forEach(function (key) {
+        clone[key] = value[key];
+      });
+      return clone;
+    }
+
+    var normalized = cloneObject(context);
+    normalized.settingsJson = safeJson(context.settings, {});
+    normalized.transportJson = safeJson(context.transport, {});
+    delete normalized.settings;
+    delete normalized.transport;
+
+    normalized.players = Array.isArray(context.players)
+      ? context.players.map(function (player) {
+          var normalizedPlayer = cloneObject(player);
+          normalizedPlayer.botProfileJson = safeJson(player && player.botProfile, {});
+          delete normalizedPlayer.botProfile;
+          return normalizedPlayer;
+        })
+      : [];
+
+    return normalized;
+  },
+
   // ---------------------------------------------------------------------------
   // Score
   // ---------------------------------------------------------------------------
@@ -309,44 +388,75 @@ var OasizBridge = {
     });
   },
 
+  OasizGetGameId__deps: ["$oasizAllocString", "$oasizReadLaunchContext"],
   OasizGetGameId: function () {
-    var val = (window.__GAME_ID__ != null ? String(window.__GAME_ID__) : "");
-    var bufferSize = lengthBytesUTF8(val) + 1;
-    var buffer = _malloc(bufferSize);
-    stringToUTF8(val, buffer, bufferSize);
-    return buffer;
+    var context = oasizReadLaunchContext();
+    var val = window.__GAME_ID__ != null
+      ? window.__GAME_ID__
+      : context && context.gameId;
+    return oasizAllocString(val);
   },
 
+  OasizGetRoomCode__deps: ["$oasizAllocString", "$oasizReadLaunchContext"],
   OasizGetRoomCode: function () {
-    var val = (window.__ROOM_CODE__ != null ? String(window.__ROOM_CODE__) : "");
-    var bufferSize = lengthBytesUTF8(val) + 1;
-    var buffer = _malloc(bufferSize);
-    stringToUTF8(val, buffer, bufferSize);
-    return buffer;
+    var context = oasizReadLaunchContext();
+    var val = window.__ROOM_CODE__ != null
+      ? window.__ROOM_CODE__
+      : context && context.roomCode;
+    return oasizAllocString(val);
   },
 
+  OasizGetPlayerId__deps: ["$oasizAllocString", "$oasizReadLaunchContext"],
   OasizGetPlayerId: function () {
-    var val = (window.__PLAYER_ID__ != null ? String(window.__PLAYER_ID__) : "");
-    var bufferSize = lengthBytesUTF8(val) + 1;
-    var buffer = _malloc(bufferSize);
-    stringToUTF8(val, buffer, bufferSize);
-    return buffer;
+    var context = oasizReadLaunchContext();
+    var val = window.__PLAYER_ID__ != null
+      ? window.__PLAYER_ID__
+      : context && context.localPlayerId;
+    return oasizAllocString(val);
   },
 
+  OasizGetLaunchContext__deps: [
+    "$oasizAllocString",
+    "$oasizNormalizeLaunchContextForUnity",
+    "$oasizReadLaunchContext",
+  ],
+  OasizGetLaunchContext: function () {
+    var context = oasizNormalizeLaunchContextForUnity(oasizReadLaunchContext());
+    var json = "";
+    if (context) {
+      try {
+        json = JSON.stringify(context);
+      } catch (e) {
+        console.error("[OasizSDK] launch context failed to serialize:", e);
+      }
+    }
+    return oasizAllocString(json);
+  },
+
+  OasizGetPlayerName__deps: [
+    "$oasizAllocString",
+    "$oasizLocalLaunchPlayer",
+    "$oasizReadLaunchContext",
+  ],
   OasizGetPlayerName: function () {
-    var val = (window.__PLAYER_NAME__ != null ? String(window.__PLAYER_NAME__) : "");
-    var bufferSize = lengthBytesUTF8(val) + 1;
-    var buffer = _malloc(bufferSize);
-    stringToUTF8(val, buffer, bufferSize);
-    return buffer;
+    var player = oasizLocalLaunchPlayer(oasizReadLaunchContext());
+    var val = window.__PLAYER_NAME__ != null
+      ? window.__PLAYER_NAME__
+      : player && player.displayName;
+    return oasizAllocString(val);
   },
 
+  OasizGetPlayerAvatar__deps: [
+    "$oasizAllocString",
+    "$oasizLocalLaunchPlayer",
+    "$oasizReadLaunchContext",
+  ],
   OasizGetPlayerAvatar: function () {
-    var val = (window.__PLAYER_AVATAR__ != null ? String(window.__PLAYER_AVATAR__) : "");
-    var bufferSize = lengthBytesUTF8(val) + 1;
-    var buffer = _malloc(bufferSize);
-    stringToUTF8(val, buffer, bufferSize);
-    return buffer;
+    var player = oasizLocalLaunchPlayer(oasizReadLaunchContext());
+    var val = window.__PLAYER_AVATAR__ != null
+      ? window.__PLAYER_AVATAR__
+      : player && player.avatarUrl;
+    return oasizAllocString(val);
   },
 
   OasizGetPlayerCharacter__deps: ["$oasizSendAsyncResponse"],

@@ -10,10 +10,13 @@ import {
 import { enableLogOverlay } from "./log-overlay.ts";
 import {
   getGameId,
+  getLaunchContext,
+  getLocalLaunchPlayer,
   getPlayerAvatar,
   getPlayerId,
   getPlayerName,
   getRoomCode,
+  isLaunchHost,
   openInviteModal,
   shareRoomCode,
 } from "./multiplayer.ts";
@@ -49,10 +52,13 @@ export type {
 export { enableLogOverlay } from "./log-overlay.ts";
 export {
   getGameId,
+  getLaunchContext,
+  getLocalLaunchPlayer,
   getPlayerAvatar,
   getPlayerId,
   getPlayerName,
   getRoomCode,
+  isLaunchHost,
   openInviteModal,
   shareRoomCode,
 } from "./multiplayer.ts";
@@ -85,6 +91,15 @@ export type {
   PlatformBotJsonObject,
   PlatformBotProfile,
   PlatformBotSelectionSource,
+  PlatformLobbyDefinition,
+  PlatformLobbyLaunchContext,
+  PlatformLobbyLaunchPlayer,
+  PlatformLobbyModeDefinition,
+  PlatformLobbyReadyPolicy,
+  PlatformLobbySettingDefinition,
+  PlatformLobbySettingsSchema,
+  PlatformLobbyTransportType,
+  PlatformLobbyVisibility,
   ScoreEditResult,
   ShareRequest,
   TextureAtlas,
@@ -112,6 +127,9 @@ export const oasiz = {
   flushGameState,
   shareRoomCode,
   openInviteModal,
+  getLaunchContext,
+  getLocalLaunchPlayer,
+  isLaunchHost,
   onPause,
   onResume,
   getSafeAreaTop,
@@ -136,5 +154,14 @@ export const oasiz = {
   },
   get safeAreaTop(): number {
     return getSafeAreaTop();
+  },
+  get launchContext() {
+    return getLaunchContext();
+  },
+  get localLaunchPlayer() {
+    return getLocalLaunchPlayer();
+  },
+  get isHost(): boolean {
+    return isLaunchHost();
   },
 };

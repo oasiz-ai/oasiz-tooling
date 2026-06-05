@@ -11,6 +11,76 @@ export type PublishCategory =
   | "strategy"
   | "casual";
 
+export type PlatformLobbyVisibility = "public" | "invite-only" | "private";
+
+export type PlatformLobbyReadyPolicy = "none" | "all" | "all_non_host";
+
+export type PlatformLobbyTransportType = "playroomkit" | "colyseus" | "custom";
+
+export type PlatformLobbySettingDefinition =
+  | {
+      type: "boolean";
+      default?: boolean;
+      label?: string;
+    }
+  | {
+      type: "integer" | "number";
+      default?: number;
+      enum?: number[];
+      label?: string;
+      max?: number;
+      min?: number;
+    }
+  | {
+      type: "string";
+      default?: string;
+      enum?: string[];
+      label?: string;
+      maxLength?: number;
+      minLength?: number;
+    };
+
+export type PlatformLobbySettingsSchema = Record<
+  string,
+  PlatformLobbySettingDefinition
+>;
+
+export interface PlatformLobbyModeDefinition {
+  id: string;
+  description?: string;
+  label?: string;
+  maxPlayers?: number;
+  minPlayers?: number;
+  readyPolicy?: PlatformLobbyReadyPolicy;
+  settingsSchema?: PlatformLobbySettingsSchema;
+}
+
+export interface PlatformLobbyDefinition {
+  kind: "platform-lobby";
+  defaultModeId: string;
+  maxPlayers: number;
+  minPlayers: number;
+  modes: PlatformLobbyModeDefinition[];
+  bots?: {
+    maxBots?: number;
+    minActivePlayers?: number;
+    supported?: boolean;
+  };
+  defaultVisibility?: PlatformLobbyVisibility;
+  joinInProgress?: boolean;
+  readyPolicy?: PlatformLobbyReadyPolicy;
+  reconnectGraceSeconds?: number;
+  schemaVersion?: 1;
+  transport?: {
+    config?: Record<string, unknown>;
+    type: PlatformLobbyTransportType;
+  };
+}
+
+export type PublishRuntimeManifest = Record<string, unknown> & {
+  multiplayer?: PlatformLobbyDefinition;
+};
+
 export interface PublishConfig {
   title: string;
   description: string;
@@ -18,6 +88,8 @@ export interface PublishConfig {
   gameId?: string;
   isMultiplayer?: boolean;
   maxPlayers?: number;
+  multiplayer?: PlatformLobbyDefinition;
+  runtimeManifest?: PublishRuntimeManifest;
   verticalOnly?: boolean;
 }
 
@@ -107,6 +179,8 @@ export async function readPublishConfig(gamePath: string): Promise<PublishConfig
     gameId: parsed.gameId,
     isMultiplayer: parsed.isMultiplayer,
     maxPlayers: parsed.maxPlayers,
+    multiplayer: parsed.multiplayer,
+    runtimeManifest: parsed.runtimeManifest,
     verticalOnly: parsed.verticalOnly,
   };
 }

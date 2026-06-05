@@ -3,7 +3,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 import { getApiUrl, readStoredCredentials, resolveAuthToken, runBrowserLoginFlow, saveStoredCredentials } from "./lib/auth.ts";
-import { type PublishConfig, writePublishConfig } from "./lib/game.ts";
+import {
+  type PlatformLobbyDefinition,
+  type PublishConfig,
+  type PublishRuntimeManifest,
+  writePublishConfig,
+} from "./lib/game.ts";
 import { getProjectRoot, toPosixPath } from "./lib/runtime.ts";
 
 const MAX_UPLOAD_ASSET_SIZE_MB = 100;
@@ -27,6 +32,7 @@ interface UploadPayload {
   gameId?: string;
   isMultiplayer?: boolean;
   maxPlayers?: number;
+  runtimeManifest?: PublishRuntimeManifest;
   verticalOnly?: boolean;
   thumbnailBase64?: string;
   bundleHtml: string;
@@ -75,6 +81,144 @@ function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   if (bytes >= 1024) return (bytes / 1024).toFixed(1) + " KB";
   return bytes + " B";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeLegacyMaxPlayers(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const maxPlayers = Math.floor(value);
+  return maxPlayers >= 1 ? maxPlayers : undefined;
+}
+
+function buildLegacyPlatformLobby(
+  config: Pick<PublishConfig, "isMultiplayer" | "maxPlayers">,
+): PlatformLobbyDefinition | undefined {
+  const maxPlayers = normalizeLegacyMaxPlayers(config.maxPlayers);
+  if (config.isMultiplayer !== true && maxPlayers === undefined) {
+    return undefined;
+  }
+
+  const capacity = maxPlayers ?? 2;
+  return {
+    kind: "platform-lobby",
+    schemaVersion: 1,
+    minPlayers: 1,
+    maxPlayers: capacity,
+    defaultModeId: "default",
+    defaultVisibility: "public",
+    readyPolicy: "all_non_host",
+    transport: { type: "custom" },
+    modes: [
+      {
+        id: "default",
+        label: "Default",
+        minPlayers: 1,
+        maxPlayers: capacity,
+      },
+    ],
+  };
+}
+
+function defaultRuntimeOrientation(verticalOnly: boolean | undefined): "portrait" | "landscape" | "any" {
+  if (verticalOnly === true) return "portrait";
+  if (verticalOnly === false) return "landscape";
+  return "any";
+}
+
+function normalizeRuntimeManifestCandidate(
+  value: PublishConfig["runtimeManifest"],
+): PublishRuntimeManifest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return { ...value };
+}
+
+function ensureRuntimeManifestBase(params: {
+  isUnity: boolean;
+  multiplayer?: PlatformLobbyDefinition;
+  runtimeManifest?: PublishRuntimeManifest;
+  verticalOnly?: boolean;
+}): PublishRuntimeManifest | undefined {
+  if (!params.runtimeManifest && !params.multiplayer) {
+    return undefined;
+  }
+
+  const manifest: PublishRuntimeManifest = params.runtimeManifest
+    ? { ...params.runtimeManifest }
+    : {
+        artifactSchemaVersion: 1,
+        runtime: "web",
+        engine: params.isUnity ? "unity-webgl" : "html",
+        entry: "index.html",
+        orientation: defaultRuntimeOrientation(params.verticalOnly),
+        sdkVersion: "legacy",
+        capabilities: ["score", "saveState", "haptics", "share"],
+      };
+
+  manifest.artifactSchemaVersion = manifest.artifactSchemaVersion ?? 1;
+  manifest.runtime = typeof manifest.runtime === "string" ? manifest.runtime : "web";
+  manifest.engine =
+    typeof manifest.engine === "string"
+      ? manifest.engine
+      : params.isUnity
+        ? "unity-webgl"
+        : "html";
+  manifest.entry =
+    typeof manifest.entry === "string" && manifest.entry
+      ? manifest.entry
+      : "index.html";
+  manifest.orientation =
+    typeof manifest.orientation === "string"
+      ? manifest.orientation
+      : defaultRuntimeOrientation(params.verticalOnly);
+  manifest.sdkVersion =
+    typeof manifest.sdkVersion === "string" && manifest.sdkVersion
+      ? manifest.sdkVersion
+      : "legacy";
+
+  const capabilities = Array.isArray(manifest.capabilities)
+    ? manifest.capabilities.filter(
+        (capability): capability is string =>
+          typeof capability === "string" && capability.length > 0,
+      )
+    : ["score", "saveState", "haptics", "share"];
+  if (params.multiplayer && !capabilities.includes("multiplayer")) {
+    capabilities.push("multiplayer");
+  }
+  manifest.capabilities = capabilities;
+
+  if (params.multiplayer) {
+    manifest.multiplayer = params.multiplayer;
+  }
+
+  return manifest;
+}
+
+function buildUploadRuntimeManifest(params: {
+  isUnity: boolean;
+  publishConfig: PublishConfig;
+  verticalOnly?: boolean;
+}): PublishRuntimeManifest | undefined {
+  const explicitRuntimeManifest = normalizeRuntimeManifestCandidate(
+    params.publishConfig.runtimeManifest,
+  );
+  const multiplayer =
+    params.publishConfig.multiplayer ??
+    explicitRuntimeManifest?.multiplayer ??
+    buildLegacyPlatformLobby(params.publishConfig);
+
+  return ensureRuntimeManifestBase({
+    isUnity: params.isUnity,
+    multiplayer,
+    runtimeManifest: explicitRuntimeManifest,
+    verticalOnly: params.verticalOnly,
+  });
 }
 
 function detectPackageManager(projectPath: string): "bun" | "npm" {
@@ -232,6 +376,8 @@ async function readUploadPublishConfig(gamePath: string): Promise<PublishConfig>
     gameId: config.gameId,
     isMultiplayer: config.isMultiplayer,
     maxPlayers: config.maxPlayers,
+    multiplayer: config.multiplayer,
+    runtimeManifest: config.runtimeManifest,
     verticalOnly: config.verticalOnly,
   };
 }
@@ -1373,7 +1519,7 @@ async function uploadFileToR2(signedUrl: string, buffer: Buffer, contentType: st
       const response = await fetch(signedUrl, {
         method: "PUT",
         headers: { "Content-Type": contentType },
-        body: buffer,
+        body: buffer as unknown as BodyInit,
       });
       if (response.ok) return;
       if (attempt < MAX_RETRIES && response.status >= 500) {
@@ -1422,6 +1568,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       gameId: payload.gameId,
       isMultiplayer: payload.isMultiplayer,
       maxPlayers: payload.maxPlayers,
+      runtimeManifest: payload.runtimeManifest,
       verticalOnly: payload.verticalOnly,
     }),
   });
@@ -1509,6 +1656,7 @@ async function uploadGame(payload: UploadPayload, token: string): Promise<{ game
       bundleHtml: payload.bundleHtml,
       allAssetPaths,
       isNewGame: !isUpdate,
+      runtimeManifest: payload.runtimeManifest,
     }),
   });
 
@@ -1702,6 +1850,12 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
   }
 
   const thumbnailBase64 = await readThumbnail(gamePath);
+  const verticalOnly = orientationOverride ?? publishConfig.verticalOnly;
+  const runtimeManifest = buildUploadRuntimeManifest({
+    isUnity,
+    publishConfig,
+    verticalOnly,
+  });
   const payload: UploadPayload = {
     title: publishConfig.title,
     slug: gameSlug,
@@ -1711,7 +1865,8 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     gameId: uploadAsNew ? undefined : publishConfig.gameId,
     isMultiplayer: publishConfig.isMultiplayer,
     maxPlayers: publishConfig.maxPlayers,
-    verticalOnly: orientationOverride ?? publishConfig.verticalOnly,
+    runtimeManifest,
+    verticalOnly,
     thumbnailBase64,
     bundleHtml,
     ...(assets ? { assets } : {}),
@@ -1728,6 +1883,7 @@ export async function runUploadCommand(gameFolder: string, args: string[] = []):
     console.log(`  Creator Email: ${payload.email || "(from login at runtime)"}`);
     console.log(`  Has Thumbnail: ${Boolean(payload.thumbnailBase64)}`);
     console.log(`  Vertical Only: ${payload.verticalOnly ?? true} (default: true)`);
+    console.log(`  Platform Lobby: ${Boolean(payload.runtimeManifest?.multiplayer)}`);
     console.log(`  Bundle Size: ${(payload.bundleHtml.length / 1024).toFixed(1)} KB`);
     console.log(`  Type: ${isUnity ? "Unity WebGL" : useInlining ? "Inline (legacy)" : "CDN Assets (presigned)"}`);
     if (assets) {

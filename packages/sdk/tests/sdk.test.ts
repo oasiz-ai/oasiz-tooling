@@ -20,9 +20,13 @@ import { onPause, onResume } from "../src/lifecycle.ts";
 import { leaveGame, onBackButton, onLeaveGame } from "../src/navigation.ts";
 import {
   getGameId,
+  getLaunchContext,
+  getLocalLaunchPlayer,
   getPlayerAvatar,
+  getPlayerId,
   getPlayerName,
   getRoomCode,
+  isLaunchHost,
   openInviteModal,
   shareRoomCode,
 } from "../src/multiplayer.ts";
@@ -787,19 +791,127 @@ test("multiplayer getters return injected values", () => {
     {
       __GAME_ID__: "game-123",
       __ROOM_CODE__: "WXYZ",
+      __PLAYER_ID__: "user-123",
       __PLAYER_NAME__: "Josiah",
       __PLAYER_AVATAR__: "https://example.com/avatar.png",
     },
     () => {
       assert.equal(getGameId(), "game-123");
       assert.equal(getRoomCode(), "WXYZ");
+      assert.equal(getPlayerId(), "user-123");
       assert.equal(getPlayerName(), "Josiah");
       assert.equal(getPlayerAvatar(), "https://example.com/avatar.png");
 
       assert.equal(oasiz.gameId, "game-123");
       assert.equal(oasiz.roomCode, "WXYZ");
+      assert.equal(oasiz.playerId, "user-123");
       assert.equal(oasiz.playerName, "Josiah");
       assert.equal(oasiz.playerAvatar, "https://example.com/avatar.png");
+    },
+  );
+});
+
+test("platform launch context backs multiplayer getters", () => {
+  const launchContext = {
+    gameId: "game-123",
+    gameVersionId: "version-456",
+    hostUserId: "user-host",
+    localPlayerId: "user-guest",
+    modeId: "duos",
+    players: [
+      {
+        avatarUrl: "https://example.com/host.png",
+        botProfile: null,
+        connected: true,
+        displayName: "Host",
+        isBot: false,
+        memberId: "member-host",
+        ready: true,
+        role: "host",
+        slotIndex: 0,
+        teamId: "red",
+        userId: "user-host",
+      },
+      {
+        avatarUrl: "https://example.com/guest.png",
+        botProfile: null,
+        connected: true,
+        displayName: "Guest",
+        isBot: false,
+        memberId: "member-guest",
+        ready: false,
+        role: null,
+        slotIndex: 1,
+        teamId: "blue",
+        userId: "user-guest",
+      },
+    ],
+    roomCode: "ABCD23",
+    roomId: "room-123",
+    sessionId: "session-123",
+    settings: { durationMinutes: 10, friendlyFire: false },
+    transport: { type: "custom", config: { channel: "room-123" } },
+  };
+
+  withWindow(
+    {
+      __OASIZ_LAUNCH_CONTEXT__: launchContext,
+    },
+    () => {
+      const context = getLaunchContext();
+
+      assert.equal(context?.gameId, "game-123");
+      assert.equal(context?.modeId, "duos");
+      assert.equal(context?.settings.durationMinutes, 10);
+      assert.equal(context?.players.length, 2);
+      assert.equal(getGameId(), "game-123");
+      assert.equal(getRoomCode(), "ABCD23");
+      assert.equal(getPlayerId(), "user-guest");
+      assert.equal(getPlayerName(), "Guest");
+      assert.equal(getPlayerAvatar(), "https://example.com/guest.png");
+      assert.equal(getLocalLaunchPlayer()?.memberId, "member-guest");
+      assert.equal(isLaunchHost(), false);
+      assert.equal(oasiz.launchContext?.sessionId, "session-123");
+      assert.equal(oasiz.localLaunchPlayer?.displayName, "Guest");
+      assert.equal(oasiz.isHost, false);
+    },
+  );
+});
+
+test("platform launch context bridge function takes precedence over globals", () => {
+  withWindow(
+    {
+      __GAME_ID__: "legacy-game",
+      __OASIZ_LAUNCH_CONTEXT__: { gameId: "ignored" },
+      __oasizGetLaunchContext: () => ({
+        gameId: "game-hosted",
+        gameVersionId: null,
+        hostUserId: "user-host",
+        localPlayerId: "user-host",
+        modeId: "classic",
+        players: [
+          {
+            connected: true,
+            displayName: "Host",
+            isBot: false,
+            memberId: "member-host",
+            ready: true,
+            slotIndex: 0,
+            userId: "user-host",
+          },
+        ],
+        roomCode: "ROOM99",
+        roomId: "room-hosted",
+        sessionId: "session-hosted",
+        settings: {},
+        transport: {},
+      }),
+    },
+    () => {
+      assert.equal(getLaunchContext()?.gameId, "game-hosted");
+      assert.equal(getGameId(), "legacy-game");
+      assert.equal(isLaunchHost(), true);
+      assert.equal(oasiz.isHost, true);
     },
   );
 });

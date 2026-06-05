@@ -58,6 +58,31 @@ async function writeViteFixture(root: string, name = "kite"): Promise<string> {
         description: "asset-heavy test",
         category: "arcade",
         gameId: "game-existing",
+        multiplayer: {
+          kind: "platform-lobby",
+          schemaVersion: 1,
+          minPlayers: 1,
+          maxPlayers: 4,
+          defaultModeId: "classic",
+          readyPolicy: "all_non_host",
+          transport: { type: "custom" },
+          modes: [
+            {
+              id: "classic",
+              label: "Classic",
+              minPlayers: 1,
+              maxPlayers: 4,
+              settingsSchema: {
+                durationMinutes: {
+                  type: "integer",
+                  min: 3,
+                  max: 20,
+                  default: 10,
+                },
+              },
+            },
+          ],
+        },
         verticalOnly: false,
       },
       null,
@@ -1561,6 +1586,7 @@ test("upload dry-run reports presigned CDN upload shape", async () => {
     assert.match(output, /Asset Transport: CDN assets via presigned R2 upload/);
     assert.match(output, /Has Thumbnail: true/);
     assert.match(output, /Vertical Only: false/);
+    assert.match(output, /Platform Lobby: true/);
     assert.match(output, /Game ID: game-existing/);
     assert.match(output, /Bundle Size:/);
   });
@@ -1647,6 +1673,12 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
     assert.ok(calls.find((call) => call.url.endsWith("/sync-html") && call.method === "POST"));
     assert.ok(calls.find((call) => call.url.endsWith("/thumbnail") && call.method === "POST"));
 
+    const initCall = calls.find((call) => call.url.endsWith("/init"));
+    assert.ok(initCall);
+    const initBody = JSON.parse(initCall.body) as { runtimeManifest?: { multiplayer?: { defaultModeId?: string; maxPlayers?: number } } };
+    assert.equal(initBody.runtimeManifest?.multiplayer?.defaultModeId, "classic");
+    assert.equal(initBody.runtimeManifest?.multiplayer?.maxPlayers, 4);
+
     const presignCall = calls.find((call) => call.url.endsWith("/presign"));
     assert.ok(presignCall);
     const presignBody = JSON.parse(presignCall.body) as { assets: Array<{ path: string; contentType: string }> };
@@ -1661,9 +1693,14 @@ test("real upload uses init, presign, R2 PUTs, sync-html, and non-blocking thumb
 
     const syncCall = calls.find((call) => call.url.endsWith("/sync-html"));
     assert.ok(syncCall);
-    const syncBody = JSON.parse(syncCall.body) as { allAssetPaths: string[]; assets?: unknown };
+    const syncBody = JSON.parse(syncCall.body) as {
+      allAssetPaths: string[];
+      assets?: unknown;
+      runtimeManifest?: { multiplayer?: { modes?: Array<{ id: string }> } };
+    };
     assert.equal("assets" in syncBody, false);
     assert.deepEqual(syncBody.allAssetPaths.sort(), ["assets/config.json", "assets/index.js", "images/pic.png"]);
+    assert.equal(syncBody.runtimeManifest?.multiplayer?.modes?.[0]?.id, "classic");
 
     const jsonPut = calls.find((call) => call.method === "PUT" && call.url.includes(encodeURIComponent("assets/config.json")));
     assert.ok(jsonPut);

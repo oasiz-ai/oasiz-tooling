@@ -61,6 +61,42 @@ Useful upload flags:
 
 Unity WebGL exports are detected under `Unity/<game>/Build/index.html`; the upload includes Build assets, preserves the OasizDefault template marker behavior, and rewrites Unity asset paths for CDN delivery when needed.
 
+### Platform lobby config
+
+Multiplayer room setup belongs to the Oasiz platform lobby, not the game
+runtime. Add a `multiplayer` object to `publish.json`; the upload command sends
+it as `runtimeManifest.multiplayer` so the platform can list rooms, collect
+settings, and inject the final launch context when the host starts.
+
+```json
+{
+  "title": "Space Force",
+  "category": "action",
+  "multiplayer": {
+    "kind": "platform-lobby",
+    "schemaVersion": 1,
+    "minPlayers": 1,
+    "maxPlayers": 4,
+    "defaultModeId": "classic",
+    "readyPolicy": "all_non_host",
+    "transport": { "type": "custom" },
+    "modes": [
+      {
+        "id": "classic",
+        "label": "Classic",
+        "minPlayers": 1,
+        "maxPlayers": 4
+      }
+    ]
+  }
+}
+```
+
+Legacy `isMultiplayer` / `maxPlayers` configs still upload: the CLI
+synthesizes a one-mode platform lobby with custom transport. New games should
+prefer the explicit `multiplayer` object because it can declare modes and
+validated settings.
+
 ## Create Server
 
 `oasiz create-server [slug]` creates a Studio Colyseus game server. The public
