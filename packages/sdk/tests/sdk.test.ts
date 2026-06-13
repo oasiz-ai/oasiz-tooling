@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   enableLogOverlay,
@@ -34,6 +37,8 @@ import { submitScore } from "../src/score.ts";
 import { share } from "../src/share.ts";
 import { flushGameState, loadGameState, saveGameState } from "../src/state.ts";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 function withWindow<T>(value: unknown, run: () => T): T {
   const globalScope = globalThis as typeof globalThis & { window?: unknown };
   const originalWindow = globalScope.window;
@@ -53,6 +58,16 @@ function withoutWindow<T>(run: () => T): T {
     return run();
   } finally {
     globalScope.window = originalWindow;
+  }
+}
+
+function withConsoleError<T>(handler: (...args: unknown[]) => void, run: () => T): T {
+  const originalError = console.error;
+  console.error = handler;
+  try {
+    return run();
+  } finally {
+    console.error = originalError;
   }
 }
 
@@ -714,6 +729,27 @@ test("shareRoomCode forwards invite override options to the bridge", () => {
   assert.deepEqual(calls, [{ roomCode: "ABCD", inviteOverride: true }]);
 });
 
+test("shareRoomCode does not throw when host bridge fails", () => {
+  const errors: string[] = [];
+  withConsoleError(
+    (...args) => errors.push(args.map(String).join(" ")),
+    () => {
+      withWindow(
+        {
+          shareRoomCode: () => {
+            throw new Error("host room handoff failed");
+          },
+        },
+        () => {
+          assert.doesNotThrow(() => shareRoomCode("ABCD"));
+        },
+      );
+    },
+  );
+
+  assert.match(errors.join("\n"), /shareRoomCode bridge failed/);
+});
+
 test("openInviteModal calls bridge when available", () => {
   let calls = 0;
   withWindow(
@@ -729,6 +765,43 @@ test("openInviteModal calls bridge when available", () => {
   );
 
   assert.equal(calls, 2);
+});
+
+test("openInviteModal does not throw when host bridge fails", () => {
+  const errors: string[] = [];
+  withConsoleError(
+    (...args) => errors.push(args.map(String).join(" ")),
+    () => {
+      withWindow(
+        {
+          openInviteModal: () => {
+            throw new Error("invite modal failed");
+          },
+        },
+        () => {
+          assert.doesNotThrow(() => openInviteModal());
+        },
+      );
+    },
+  );
+
+  assert.match(errors.join("\n"), /openInviteModal bridge failed/);
+});
+
+test("Unity WebGL multiplayer bridge guards host bridge failures", () => {
+  const bridge = readFileSync(
+    join(
+      __dirname,
+      "../../OasizSDK/Runtime/Plugins/WebGL/OasizBridge.jslib",
+    ),
+    "utf8",
+  );
+
+  assert.match(bridge, /\$oasizCallHostBridge/);
+  assert.match(bridge, /OasizShareRoomCode__deps:\s*\["\$oasizCallHostBridge"\]/);
+  assert.match(bridge, /oasizCallHostBridge\("shareRoomCode"/);
+  assert.match(bridge, /OasizOpenInviteModal__deps:\s*\["\$oasizCallHostBridge"\]/);
+  assert.match(bridge, /oasizCallHostBridge\("openInviteModal"/);
 });
 
 test("share rejects empty requests", async () => {

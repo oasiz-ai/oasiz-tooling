@@ -33,6 +33,21 @@ var OasizBridge = {
     SendMessage(oasizUnityBridgeState.gameObjectName, "_OnAsyncResponseFromJS", requestId + "|" + json);
   },
 
+  $oasizCallHostBridge: function (label, fn) {
+    try {
+      var result = fn();
+      if (result && typeof result.then === "function") {
+        result.catch(function (err) {
+          console.error("[OasizSDK] " + label + " bridge failed:", err);
+        });
+      }
+      return result;
+    } catch (e) {
+      console.error("[OasizSDK] " + label + " bridge failed:", e);
+      return null;
+    }
+  },
+
   $oasizNormalizeBotResult: function (result) {
     if (!result || !Array.isArray(result.bots)) {
       return result;
@@ -344,6 +359,7 @@ var OasizBridge = {
   // Multiplayer
   // ---------------------------------------------------------------------------
 
+  OasizShareRoomCode__deps: ["$oasizCallHostBridge"],
   OasizShareRoomCode: function (roomCodePtr, optionsJsonPtr) {
     var roomCode = roomCodePtr ? UTF8ToString(roomCodePtr) : null;
     if (roomCode === "") roomCode = null;
@@ -356,20 +372,26 @@ var OasizBridge = {
       }
     }
     if (typeof window.shareRoomCode === "function") {
-      window.shareRoomCode(roomCode, options);
+      oasizCallHostBridge("shareRoomCode", function () {
+        return window.shareRoomCode(roomCode, options);
+      });
     } else {
       console.warn("[OasizSDK] shareRoomCode bridge is unavailable.");
     }
   },
 
+  OasizOpenInviteModal__deps: ["$oasizCallHostBridge"],
   OasizOpenInviteModal: function () {
     if (typeof window.openInviteModal === "function") {
-      window.openInviteModal();
+      oasizCallHostBridge("openInviteModal", function () {
+        return window.openInviteModal();
+      });
     } else {
       console.warn("[OasizSDK] openInviteModal bridge is unavailable.");
     }
   },
 
+  OasizShareRequest__deps: ["$oasizCallHostBridge"],
   OasizShareRequest: function (requestJsonPtr) {
     var json = UTF8ToString(requestJsonPtr);
     var request;
@@ -383,8 +405,8 @@ var OasizBridge = {
       console.warn("[OasizSDK] __oasizShareRequest bridge is unavailable.");
       return;
     }
-    Promise.resolve(window.__oasizShareRequest(request)).catch(function (err) {
-      console.error("[OasizSDK] share request failed:", err);
+    oasizCallHostBridge("__oasizShareRequest", function () {
+      return Promise.resolve(window.__oasizShareRequest(request));
     });
   },
 

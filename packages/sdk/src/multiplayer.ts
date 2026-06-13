@@ -35,6 +35,10 @@ function getBridgeWindow(): MultiplayerBridgeWindow | undefined {
   return window as MultiplayerBridgeWindow;
 }
 
+function logBridgeError(method: string, error: unknown): void {
+  console.error(`[oasiz/sdk] ${method} bridge failed:`, error);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -174,7 +178,11 @@ export function shareRoomCode(
   const bridge = getBridgeWindow();
 
   if (typeof bridge?.shareRoomCode === "function") {
-    bridge.shareRoomCode(roomCode, options);
+    try {
+      bridge.shareRoomCode(roomCode, options);
+    } catch (error) {
+      logBridgeError("shareRoomCode", error);
+    }
     return;
   }
 
@@ -193,7 +201,11 @@ export function shareRoomCode(
 export function openInviteModal(): void {
   const bridge = getBridgeWindow();
   if (typeof bridge?.openInviteModal === "function") {
-    bridge.openInviteModal();
+    try {
+      bridge.openInviteModal();
+    } catch (error) {
+      logBridgeError("openInviteModal", error);
+    }
     return;
   }
   if (isDevelopment()) {
