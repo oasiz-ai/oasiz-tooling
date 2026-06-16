@@ -1,0 +1,20 @@
+{
+  "block_id": "assert_no_unity_script_error",
+  "label": "Assert no Unity script error dialogs",
+  "kind": "assertion",
+  "notes": "Checks for the generic Unity/WebView dialogs reported in OAS-938.",
+  "appium_commands": [
+    {
+      "type": "assert_no_text",
+      "label": "assert_no_short_script_error_dialog",
+      "value": "Script error.",
+      "timeout_ms": 1000
+    },
+    {
+      "type": "assert_no_text",
+      "label": "assert_no_unity_content_script_error_dialog",
+      "value": "An error occurred running the Unity content on this page",
+      "timeout_ms": 1000
+    }
+  ]
+}

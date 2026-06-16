@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import {
   enableLogOverlay,
@@ -69,6 +70,59 @@ function withConsoleError<T>(handler: (...args: unknown[]) => void, run: () => T
   } finally {
     console.error = originalError;
   }
+}
+
+function createUnityBridgeHarness(windowValue: Record<string, unknown>) {
+  const messages: Array<{
+    gameObjectName: string;
+    methodName: string;
+    payload: string;
+  }> = [];
+  const errors: string[] = [];
+  const bridge = readFileSync(
+    join(
+      __dirname,
+      "../../OasizSDK/Runtime/Plugins/WebGL/OasizBridge.jslib",
+    ),
+    "utf8",
+  );
+  const context: Record<string, unknown> = {
+    console: {
+      ...console,
+      error: (...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      },
+    },
+    LibraryManager: { library: {} },
+    mergeInto(target: Record<string, unknown>, source: Record<string, unknown>) {
+      Object.assign(target, source);
+    },
+    SendMessage(gameObjectName: string, methodName: string, payload: string) {
+      messages.push({ gameObjectName, methodName, payload });
+    },
+    UTF8ToString(value: unknown) {
+      return String(value ?? "");
+    },
+    window: windowValue,
+  };
+
+  runInNewContext(bridge, context);
+
+  const library = (context.LibraryManager as {
+    library: Record<string, unknown>;
+  }).library;
+  context.oasizUnityBridgeState = library.$oasizUnityBridgeState;
+  (context.oasizUnityBridgeState as { gameObjectName: string }).gameObjectName =
+    "OasizSDK";
+  context.oasizSendAsyncResponse = library.$oasizSendAsyncResponse;
+  context.oasizCallAsyncHostBridge = library.$oasizCallAsyncHostBridge;
+  context.oasizNormalizeBotResult = library.$oasizNormalizeBotResult;
+
+  return {
+    errors,
+    library: library as Record<string, (...args: string[]) => void>,
+    messages,
+  };
 }
 
 function withFetch<T>(value: unknown, run: () => T): T {
@@ -798,10 +852,49 @@ test("Unity WebGL multiplayer bridge guards host bridge failures", () => {
   );
 
   assert.match(bridge, /\$oasizCallHostBridge/);
+  assert.match(bridge, /\$oasizCallAsyncHostBridge/);
   assert.match(bridge, /OasizShareRoomCode__deps:\s*\["\$oasizCallHostBridge"\]/);
   assert.match(bridge, /oasizCallHostBridge\("shareRoomCode"/);
   assert.match(bridge, /OasizOpenInviteModal__deps:\s*\["\$oasizCallHostBridge"\]/);
   assert.match(bridge, /oasizCallHostBridge\("openInviteModal"/);
+  assert.match(bridge, /OasizGetPlayerCharacter__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("getPlayerCharacter"/);
+  assert.match(bridge, /OasizRequestBots__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("requestBots"/);
+  assert.match(bridge, /OasizEditScore__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("editScore"/);
+});
+
+test("Unity WebGL async bridge converts synchronous host failures into null responses", () => {
+  const harness = createUnityBridgeHarness({
+    __oasizEditScore: () => {
+      throw new Error("score bridge failed during lobby handoff");
+    },
+    __oasizGetPlayerCharacter: () => {
+      throw new Error("character bridge failed during lobby join");
+    },
+    __oasizRequestBots: () => {
+      throw new Error("bot bridge failed during lobby handoff");
+    },
+  });
+
+  assert.doesNotThrow(() => {
+    harness.library.OasizGetPlayerCharacter("character-request");
+  });
+  assert.doesNotThrow(() => {
+    harness.library.OasizRequestBots("bots-request", JSON.stringify({ count: 1 }));
+  });
+  assert.doesNotThrow(() => {
+    harness.library.OasizEditScore("score-request", JSON.stringify({ delta: 1 }));
+  });
+
+  assert.deepEqual(
+    harness.messages.map((message) => message.payload),
+    ["character-request|", "bots-request|", "score-request|"],
+  );
+  assert.match(harness.errors.join("\n"), /getPlayerCharacter request failed/);
+  assert.match(harness.errors.join("\n"), /requestBots request failed/);
+  assert.match(harness.errors.join("\n"), /editScore request failed/);
 });
 
 test("share rejects empty requests", async () => {
