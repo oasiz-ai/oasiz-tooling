@@ -1,0 +1,64 @@
+{
+  "version": "oasiz-appium-v1",
+  "name": "OAS-938 primary creates Performative Matcha lobby",
+  "commands": [
+    {
+      "type": "deep_link",
+      "label": "primary_open_machine_auth",
+      "url": "oasiz://machine-auth",
+      "env": {
+        "OASIZ_TEST_EMAIL": "env:OASIZ_TEST_EMAIL",
+        "OASIZ_TEST_PASSWORD": "env:OASIZ_TEST_PASSWORD"
+      }
+    },
+    {
+      "type": "wait",
+      "label": "primary_wait_for_authenticated_home",
+      "ms": 6000
+    },
+    {
+      "type": "deep_link",
+      "label": "primary_open_club_jibble",
+      "url": "oasiz://club-jibble"
+    },
+    {
+      "type": "wait",
+      "label": "primary_wait_for_club_jibble_visible",
+      "ms": 8000
+    },
+    {
+      "type": "tap_element",
+      "label": "primary_tap_performative_matcha_arcade_machine",
+      "using": "name",
+      "value": "Performative Matcha"
+    },
+    {
+      "type": "wait",
+      "label": "primary_wait_for_lobby_screen",
+      "ms": 8000
+    },
+    {
+      "type": "tap_element",
+      "label": "primary_create_or_enter_public_lobby",
+      "using": "name",
+      "value": "Create lobby"
+    },
+    {
+      "type": "wait",
+      "label": "primary_wait_in_public_lobby_for_second_player",
+      "ms": 180000
+    },
+    {
+      "type": "assert_no_text",
+      "label": "primary_assert_no_short_script_error_dialog",
+      "value": "Script error.",
+      "timeout_ms": 1000
+    },
+    {
+      "type": "assert_no_text",
+      "label": "primary_assert_no_unity_content_script_error_dialog",
+      "value": "An error occurred running the Unity content on this page",
+      "timeout_ms": 1000
+    }
+  ]
+}

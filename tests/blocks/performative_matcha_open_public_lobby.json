@@ -1,0 +1,29 @@
+{
+  "block_id": "performative_matcha_open_public_lobby",
+  "label": "Open Performative Matcha public lobby",
+  "kind": "gameNavigation",
+  "notes": "Starts from authenticated Club Jibble. The expected public path is the arcade machine visibly waiting for players.",
+  "appium_commands": [
+    {
+      "type": "deep_link",
+      "label": "open_club_jibble",
+      "url": "oasiz://club-jibble"
+    },
+    {
+      "type": "wait",
+      "label": "wait_for_club_jibble_visible",
+      "ms": 8000
+    },
+    {
+      "type": "tap_element",
+      "label": "tap_performative_matcha_arcade_machine",
+      "using": "name",
+      "value": "Performative Matcha"
+    },
+    {
+      "type": "wait",
+      "label": "wait_for_lobby_screen",
+      "ms": 8000
+    }
+  ]
+}

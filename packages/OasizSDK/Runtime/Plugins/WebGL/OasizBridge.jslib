@@ -33,6 +33,45 @@ var OasizBridge = {
     SendMessage(oasizUnityBridgeState.gameObjectName, "_OnAsyncResponseFromJS", requestId + "|" + json);
   },
 
+  $oasizCallHostBridge: function (label, fn) {
+    try {
+      var result = fn();
+      if (result && typeof result.then === "function") {
+        result.catch(function (err) {
+          console.error("[OasizSDK] " + label + " bridge failed:", err);
+        });
+      }
+      return result;
+    } catch (e) {
+      console.error("[OasizSDK] " + label + " bridge failed:", e);
+      return null;
+    }
+  },
+
+  $oasizCallAsyncHostBridge__deps: ["$oasizSendAsyncResponse"],
+  $oasizCallAsyncHostBridge: function (label, requestId, fn, normalizeResult) {
+    function sendNullResponse() {
+      oasizSendAsyncResponse(requestId, null);
+    }
+
+    try {
+      Promise.resolve(fn())
+        .then(function (result) {
+          if (typeof normalizeResult === "function") {
+            result = normalizeResult(result);
+          }
+          oasizSendAsyncResponse(requestId, result);
+        })
+        .catch(function (err) {
+          console.error("[OasizSDK] " + label + " request failed:", err);
+          sendNullResponse();
+        });
+    } catch (e) {
+      console.error("[OasizSDK] " + label + " request failed:", e);
+      sendNullResponse();
+    }
+  },
+
   $oasizNormalizeBotResult: function (result) {
     if (!result || !Array.isArray(result.bots)) {
       return result;
@@ -344,6 +383,7 @@ var OasizBridge = {
   // Multiplayer
   // ---------------------------------------------------------------------------
 
+  OasizShareRoomCode__deps: ["$oasizCallHostBridge"],
   OasizShareRoomCode: function (roomCodePtr, optionsJsonPtr) {
     var roomCode = roomCodePtr ? UTF8ToString(roomCodePtr) : null;
     if (roomCode === "") roomCode = null;
@@ -356,20 +396,26 @@ var OasizBridge = {
       }
     }
     if (typeof window.shareRoomCode === "function") {
-      window.shareRoomCode(roomCode, options);
+      oasizCallHostBridge("shareRoomCode", function () {
+        return window.shareRoomCode(roomCode, options);
+      });
     } else {
       console.warn("[OasizSDK] shareRoomCode bridge is unavailable.");
     }
   },
 
+  OasizOpenInviteModal__deps: ["$oasizCallHostBridge"],
   OasizOpenInviteModal: function () {
     if (typeof window.openInviteModal === "function") {
-      window.openInviteModal();
+      oasizCallHostBridge("openInviteModal", function () {
+        return window.openInviteModal();
+      });
     } else {
       console.warn("[OasizSDK] openInviteModal bridge is unavailable.");
     }
   },
 
+  OasizShareRequest__deps: ["$oasizCallHostBridge"],
   OasizShareRequest: function (requestJsonPtr) {
     var json = UTF8ToString(requestJsonPtr);
     var request;
@@ -383,8 +429,8 @@ var OasizBridge = {
       console.warn("[OasizSDK] __oasizShareRequest bridge is unavailable.");
       return;
     }
-    Promise.resolve(window.__oasizShareRequest(request)).catch(function (err) {
-      console.error("[OasizSDK] share request failed:", err);
+    oasizCallHostBridge("__oasizShareRequest", function () {
+      return Promise.resolve(window.__oasizShareRequest(request));
     });
   },
 
@@ -459,7 +505,7 @@ var OasizBridge = {
     return oasizAllocString(val);
   },
 
-  OasizGetPlayerCharacter__deps: ["$oasizSendAsyncResponse"],
+  OasizGetPlayerCharacter__deps: ["$oasizCallAsyncHostBridge", "$oasizSendAsyncResponse"],
   OasizGetPlayerCharacter: function (requestIdPtr) {
     var requestId = UTF8ToString(requestIdPtr);
     if (typeof window.__oasizGetPlayerCharacter !== "function") {
@@ -468,17 +514,16 @@ var OasizBridge = {
       return;
     }
 
-    Promise.resolve(window.__oasizGetPlayerCharacter())
-      .then(function (result) {
-        oasizSendAsyncResponse(requestId, result);
-      })
-      .catch(function (err) {
-        console.error("[OasizSDK] getPlayerCharacter request failed:", err);
-        oasizSendAsyncResponse(requestId, null);
-      });
+    oasizCallAsyncHostBridge("getPlayerCharacter", requestId, function () {
+      return window.__oasizGetPlayerCharacter();
+    });
   },
 
-  OasizRequestBots__deps: ["$oasizSendAsyncResponse", "$oasizNormalizeBotResult"],
+  OasizRequestBots__deps: [
+    "$oasizCallAsyncHostBridge",
+    "$oasizNormalizeBotResult",
+    "$oasizSendAsyncResponse",
+  ],
   OasizRequestBots: function (requestIdPtr, optionsJsonPtr) {
     var requestId = UTF8ToString(requestIdPtr);
     var optionsJson = UTF8ToString(optionsJsonPtr);
@@ -497,17 +542,12 @@ var OasizBridge = {
       return;
     }
 
-    Promise.resolve(window.__oasizRequestBots(options))
-      .then(function (result) {
-        oasizSendAsyncResponse(requestId, oasizNormalizeBotResult(result));
-      })
-      .catch(function (err) {
-        console.error("[OasizSDK] requestBots request failed:", err);
-        oasizSendAsyncResponse(requestId, null);
-      });
+    oasizCallAsyncHostBridge("requestBots", requestId, function () {
+      return window.__oasizRequestBots(options);
+    }, oasizNormalizeBotResult);
   },
 
-  OasizEditScore__deps: ["$oasizSendAsyncResponse"],
+  OasizEditScore__deps: ["$oasizCallAsyncHostBridge", "$oasizSendAsyncResponse"],
   OasizEditScore: function (requestIdPtr, payloadJsonPtr) {
     var requestId = UTF8ToString(requestIdPtr);
     var payloadJson = UTF8ToString(payloadJsonPtr);
@@ -526,14 +566,9 @@ var OasizBridge = {
       return;
     }
 
-    Promise.resolve(window.__oasizEditScore(payload))
-      .then(function (result) {
-        oasizSendAsyncResponse(requestId, result);
-      })
-      .catch(function (err) {
-        console.error("[OasizSDK] editScore request failed:", err);
-        oasizSendAsyncResponse(requestId, null);
-      });
+    oasizCallAsyncHostBridge("editScore", requestId, function () {
+      return window.__oasizEditScore(payload);
+    });
   },
 
   // ---------------------------------------------------------------------------

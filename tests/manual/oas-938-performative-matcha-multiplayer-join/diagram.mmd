@@ -1,0 +1,43 @@
+flowchart TD
+  start["Start OAS-938 multiplayer regression"]
+  primary_auth_open["Primary: open machine-auth route"]
+  primary_auth_visible["Primary: authenticated app home visible"]
+  primary_club_open["Primary: open Club Jibble"]
+  primary_club_visible["Primary: Club Jibble visible"]
+  primary_arcade_tap["Primary: tap Performative Matcha arcade machine"]
+  primary_lobby_visible["Primary: lobby screen visible"]
+  primary_create_lobby["Primary: create or enter public lobby"]
+  primary_waiting["Primary: waiting in public lobby"]
+  secondary_auth_open["Secondary: open machine-auth route with env override"]
+  secondary_auth_visible["Secondary: authenticated app home visible"]
+  secondary_club_open["Secondary: open Club Jibble"]
+  secondary_club_visible["Secondary: Club Jibble visible"]
+  secondary_arcade_tap["Secondary: tap waiting Performative Matcha machine"]
+  secondary_joined["Secondary: joined lobby or interactive game state visible"]
+  no_short_dialog["Assert no Script error. dialog"]
+  no_unity_dialog["Assert no Unity content script-error dialog"]
+  passed["Both players remain in interactive lobby/game state"]
+
+  start --> primary_auth_open
+  primary_auth_open --> primary_auth_visible
+  primary_auth_visible --> primary_club_open
+  primary_club_open --> primary_club_visible
+  primary_club_visible --> primary_arcade_tap
+  primary_arcade_tap --> primary_lobby_visible
+  primary_lobby_visible --> primary_create_lobby
+  primary_create_lobby --> primary_waiting
+  primary_waiting --> secondary_auth_open
+  secondary_auth_open --> secondary_auth_visible
+  secondary_auth_visible --> secondary_club_open
+  secondary_club_open --> secondary_club_visible
+  secondary_club_visible --> secondary_arcade_tap
+  secondary_arcade_tap --> secondary_joined
+  secondary_joined --> no_short_dialog
+  no_short_dialog --> no_unity_dialog
+  no_unity_dialog --> passed
+
+  classDef pending fill:#f8fafc,stroke:#cbd5e1,color:#475569;
+  classDef current fill:#dbeafe,stroke:#2563eb,color:#1e3a8a;
+  classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d;
+  classDef failed fill:#fee2e2,stroke:#dc2626,color:#7f1d1d;
+  class start,primary_auth_open,primary_auth_visible,primary_club_open,primary_club_visible,primary_arcade_tap,primary_lobby_visible,primary_create_lobby,primary_waiting,secondary_auth_open,secondary_auth_visible,secondary_club_open,secondary_club_visible,secondary_arcade_tap,secondary_joined,no_short_dialog,no_unity_dialog,passed pending;
