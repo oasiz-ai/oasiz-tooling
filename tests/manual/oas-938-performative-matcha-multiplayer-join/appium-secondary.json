@@ -1,0 +1,53 @@
+{
+  "version": "oasiz-appium-v1",
+  "name": "OAS-938 secondary joins Performative Matcha lobby",
+  "commands": [
+    {
+      "type": "deep_link",
+      "label": "secondary_open_machine_auth",
+      "url": "oasiz://machine-auth",
+      "env": {
+        "OASIZ_TEST_EMAIL": "env:OASIZ_TEST_EMAIL",
+        "OASIZ_TEST_PASSWORD": "env:OASIZ_TEST_PASSWORD"
+      }
+    },
+    {
+      "type": "wait",
+      "label": "secondary_wait_for_authenticated_home",
+      "ms": 6000
+    },
+    {
+      "type": "deep_link",
+      "label": "secondary_open_club_jibble",
+      "url": "oasiz://club-jibble"
+    },
+    {
+      "type": "wait",
+      "label": "secondary_wait_for_club_jibble_visible",
+      "ms": 8000
+    },
+    {
+      "type": "tap_element",
+      "label": "secondary_tap_waiting_performative_matcha_arcade_machine",
+      "using": "name",
+      "value": "Performative Matcha"
+    },
+    {
+      "type": "wait",
+      "label": "secondary_wait_for_joined_lobby_or_game",
+      "ms": 15000
+    },
+    {
+      "type": "assert_no_text",
+      "label": "secondary_assert_no_short_script_error_dialog",
+      "value": "Script error.",
+      "timeout_ms": 1000
+    },
+    {
+      "type": "assert_no_text",
+      "label": "secondary_assert_no_unity_content_script_error_dialog",
+      "value": "An error occurred running the Unity content on this page",
+      "timeout_ms": 1000
+    }
+  ]
+}

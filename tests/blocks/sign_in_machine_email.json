@@ -1,0 +1,22 @@
+{
+  "block_id": "sign_in_machine_email",
+  "label": "Sign in with machine email",
+  "kind": "auth",
+  "notes": "Uses the gated oasiz://machine-auth route. Keep credentials as environment placeholders; never inline the password.",
+  "appium_commands": [
+    {
+      "type": "deep_link",
+      "label": "open_machine_auth",
+      "url": "oasiz://machine-auth",
+      "env": {
+        "OASIZ_TEST_EMAIL": "env:OASIZ_TEST_EMAIL",
+        "OASIZ_TEST_PASSWORD": "env:OASIZ_TEST_PASSWORD"
+      }
+    },
+    {
+      "type": "wait",
+      "label": "wait_for_authenticated_home",
+      "ms": 6000
+    }
+  ]
+}
