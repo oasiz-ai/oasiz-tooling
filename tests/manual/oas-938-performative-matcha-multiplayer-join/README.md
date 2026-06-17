@@ -16,5 +16,4 @@ unit regression for the root cause lives in
 When importing these files through `oasiz test-case`, keep
 `launch-manifest.json` metadata-only. The CLI rewrites the first Appium
 `deep_link` command when a manifest contains `deep_link`, `uri`, or `game_id`;
-this workflow must keep the explicit login route as the first deep link so
-authentication happens before any game route is opened.
+this workflow must keep `oasiz://machine-auth` as the first deep link.
