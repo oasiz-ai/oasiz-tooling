@@ -4,17 +4,62 @@
   "commands": [
     {
       "type": "deep_link",
-      "label": "secondary_open_machine_auth",
-      "url": "oasiz://machine-auth",
-      "env": {
-        "OASIZ_TEST_EMAIL": "env:OASIZ_TEST_EMAIL",
-        "OASIZ_TEST_PASSWORD": "env:OASIZ_TEST_PASSWORD"
-      }
+      "label": "secondary_open_login",
+      "url": "oasiz://login"
+    },
+    {
+      "type": "wait_for_source_contains",
+      "label": "secondary_wait_for_login_email",
+      "timeout_ms": 30000,
+      "expected": "Email address"
+    },
+    {
+      "type": "type",
+      "label": "secondary_enter_email",
+      "using": "accessibility id",
+      "value": "oasiz-login-email",
+      "text": "env:OASIZ_TEST_EMAIL",
+      "clear": true
+    },
+    {
+      "type": "wait",
+      "label": "secondary_wait_after_email",
+      "ms": 3000
+    },
+    {
+      "type": "find_and_tap",
+      "label": "secondary_switch_to_sign_in_if_needed",
+      "using": "xpath",
+      "value": "//*[@label=\"Switch to sign in\" or @name=\"Switch to sign in\"]",
+      "optional": true
+    },
+    {
+      "type": "wait",
+      "label": "secondary_wait_for_sign_in_mode",
+      "ms": 1000
+    },
+    {
+      "type": "type",
+      "label": "secondary_enter_password",
+      "using": "accessibility id",
+      "value": "oasiz-login-password",
+      "text": "env:OASIZ_TEST_PASSWORD",
+      "clear": true
+    },
+    {
+      "type": "find_and_tap",
+      "label": "secondary_submit_login",
+      "using": "accessibility id",
+      "value": "oasiz-login-submit"
     },
     {
       "type": "wait",
       "label": "secondary_wait_for_authenticated_home",
-      "ms": 6000
+      "ms": 15000
+    },
+    {
+      "type": "assert_signed_in",
+      "label": "secondary_assert_signed_in"
     },
     {
       "type": "deep_link",

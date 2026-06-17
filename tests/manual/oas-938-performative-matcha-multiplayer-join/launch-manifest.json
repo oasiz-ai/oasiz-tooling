@@ -3,5 +3,5 @@
   "game_name": "Performative Matcha",
   "route": "club-jibble-arcade-public-lobby",
   "graphics": "default",
-  "notes": "Metadata-only manifest. Do not add deep_link here; the CLI rewrites the first Appium deep_link command from launch manifests, and this workflow must keep oasiz://machine-auth first."
+  "notes": "Metadata-only manifest. Do not add deep_link here; the CLI rewrites the first Appium deep_link command from launch manifests, and this workflow must keep oasiz://login first."
 }
