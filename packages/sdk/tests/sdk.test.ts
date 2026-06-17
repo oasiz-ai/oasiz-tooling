@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 
 import {
   enableLogOverlay,
@@ -34,6 +38,8 @@ import { submitScore } from "../src/score.ts";
 import { share } from "../src/share.ts";
 import { flushGameState, loadGameState, saveGameState } from "../src/state.ts";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 function withWindow<T>(value: unknown, run: () => T): T {
   const globalScope = globalThis as typeof globalThis & { window?: unknown };
   const originalWindow = globalScope.window;
@@ -54,6 +60,69 @@ function withoutWindow<T>(run: () => T): T {
   } finally {
     globalScope.window = originalWindow;
   }
+}
+
+function withConsoleError<T>(handler: (...args: unknown[]) => void, run: () => T): T {
+  const originalError = console.error;
+  console.error = handler;
+  try {
+    return run();
+  } finally {
+    console.error = originalError;
+  }
+}
+
+function createUnityBridgeHarness(windowValue: Record<string, unknown>) {
+  const messages: Array<{
+    gameObjectName: string;
+    methodName: string;
+    payload: string;
+  }> = [];
+  const errors: string[] = [];
+  const bridge = readFileSync(
+    join(
+      __dirname,
+      "../../OasizSDK/Runtime/Plugins/WebGL/OasizBridge.jslib",
+    ),
+    "utf8",
+  );
+  const context: Record<string, unknown> = {
+    console: {
+      ...console,
+      error: (...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      },
+    },
+    LibraryManager: { library: {} },
+    mergeInto(target: Record<string, unknown>, source: Record<string, unknown>) {
+      Object.assign(target, source);
+    },
+    SendMessage(gameObjectName: string, methodName: string, payload: string) {
+      messages.push({ gameObjectName, methodName, payload });
+    },
+    UTF8ToString(value: unknown) {
+      return String(value ?? "");
+    },
+    window: windowValue,
+  };
+
+  runInNewContext(bridge, context);
+
+  const library = (context.LibraryManager as {
+    library: Record<string, unknown>;
+  }).library;
+  context.oasizUnityBridgeState = library.$oasizUnityBridgeState;
+  (context.oasizUnityBridgeState as { gameObjectName: string }).gameObjectName =
+    "OasizSDK";
+  context.oasizSendAsyncResponse = library.$oasizSendAsyncResponse;
+  context.oasizCallAsyncHostBridge = library.$oasizCallAsyncHostBridge;
+  context.oasizNormalizeBotResult = library.$oasizNormalizeBotResult;
+
+  return {
+    errors,
+    library: library as Record<string, (...args: string[]) => void>,
+    messages,
+  };
 }
 
 function withFetch<T>(value: unknown, run: () => T): T {
@@ -714,6 +783,27 @@ test("shareRoomCode forwards invite override options to the bridge", () => {
   assert.deepEqual(calls, [{ roomCode: "ABCD", inviteOverride: true }]);
 });
 
+test("shareRoomCode does not throw when host bridge fails", () => {
+  const errors: string[] = [];
+  withConsoleError(
+    (...args) => errors.push(args.map(String).join(" ")),
+    () => {
+      withWindow(
+        {
+          shareRoomCode: () => {
+            throw new Error("host room handoff failed");
+          },
+        },
+        () => {
+          assert.doesNotThrow(() => shareRoomCode("ABCD"));
+        },
+      );
+    },
+  );
+
+  assert.match(errors.join("\n"), /shareRoomCode bridge failed/);
+});
+
 test("openInviteModal calls bridge when available", () => {
   let calls = 0;
   withWindow(
@@ -729,6 +819,82 @@ test("openInviteModal calls bridge when available", () => {
   );
 
   assert.equal(calls, 2);
+});
+
+test("openInviteModal does not throw when host bridge fails", () => {
+  const errors: string[] = [];
+  withConsoleError(
+    (...args) => errors.push(args.map(String).join(" ")),
+    () => {
+      withWindow(
+        {
+          openInviteModal: () => {
+            throw new Error("invite modal failed");
+          },
+        },
+        () => {
+          assert.doesNotThrow(() => openInviteModal());
+        },
+      );
+    },
+  );
+
+  assert.match(errors.join("\n"), /openInviteModal bridge failed/);
+});
+
+test("Unity WebGL multiplayer bridge guards host bridge failures", () => {
+  const bridge = readFileSync(
+    join(
+      __dirname,
+      "../../OasizSDK/Runtime/Plugins/WebGL/OasizBridge.jslib",
+    ),
+    "utf8",
+  );
+
+  assert.match(bridge, /\$oasizCallHostBridge/);
+  assert.match(bridge, /\$oasizCallAsyncHostBridge/);
+  assert.match(bridge, /OasizShareRoomCode__deps:\s*\["\$oasizCallHostBridge"\]/);
+  assert.match(bridge, /oasizCallHostBridge\("shareRoomCode"/);
+  assert.match(bridge, /OasizOpenInviteModal__deps:\s*\["\$oasizCallHostBridge"\]/);
+  assert.match(bridge, /oasizCallHostBridge\("openInviteModal"/);
+  assert.match(bridge, /OasizGetPlayerCharacter__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("getPlayerCharacter"/);
+  assert.match(bridge, /OasizRequestBots__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("requestBots"/);
+  assert.match(bridge, /OasizEditScore__deps:\s*\[[\s\S]*"\$oasizCallAsyncHostBridge"/);
+  assert.match(bridge, /oasizCallAsyncHostBridge\("editScore"/);
+});
+
+test("Unity WebGL async bridge converts synchronous host failures into null responses", () => {
+  const harness = createUnityBridgeHarness({
+    __oasizEditScore: () => {
+      throw new Error("score bridge failed during lobby handoff");
+    },
+    __oasizGetPlayerCharacter: () => {
+      throw new Error("character bridge failed during lobby join");
+    },
+    __oasizRequestBots: () => {
+      throw new Error("bot bridge failed during lobby handoff");
+    },
+  });
+
+  assert.doesNotThrow(() => {
+    harness.library.OasizGetPlayerCharacter("character-request");
+  });
+  assert.doesNotThrow(() => {
+    harness.library.OasizRequestBots("bots-request", JSON.stringify({ count: 1 }));
+  });
+  assert.doesNotThrow(() => {
+    harness.library.OasizEditScore("score-request", JSON.stringify({ delta: 1 }));
+  });
+
+  assert.deepEqual(
+    harness.messages.map((message) => message.payload),
+    ["character-request|", "bots-request|", "score-request|"],
+  );
+  assert.match(harness.errors.join("\n"), /getPlayerCharacter request failed/);
+  assert.match(harness.errors.join("\n"), /requestBots request failed/);
+  assert.match(harness.errors.join("\n"), /editScore request failed/);
 });
 
 test("share rejects empty requests", async () => {
